@@ -10,6 +10,68 @@ class LossFunction(nn.Module):
     def __init__(self):
         print("Initializing LossFunction.")
         super(LossFunction, self).__init__()
+
+    def getParameters(self):
+        "Return the model parameters as a single vectorized tensor."
+        return torch.cat( [parameter.view(-1) for parameter in self.parameters()] ) 
+    def getGrads(self):
+        "Return gradient w.r.t. model parameters of all model layers  as a single vectorized tensor."
+        return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()] )   
+    def set(self, θ):
+        "Set model parameters."
+        ind = 0
+        for parameter in self.parameters():
+            if parameter.size() != θ[ind].size():
+                raise Exception('Dimensions do not match')
+            parameter.data =  θ[ind].data
+            ind += 1
+
+    def _vecMult_aux(self, vec, output, i, quadratic=False):
+        """Multiply the Jacobian and the vector (1-d tensor) vec, if qudratic is True also compute the outer product of the Jacobian with itself. 
+          The Jacobian is computed  ONLY w.r.t. i-th neuron in the output."""
+
+        
+        #Compute the i-th column in the Jacobian matrix, i.e., the grdaient of the i-th neuron in the output layer w.r.t. model parameters
+        selctor = np.zeros( output.size()[-1]  )
+        selctor[i] = 1
+        selector = torch.tensor( selctor  )
+        selector =  selector.view(1, -1)
+        #Reset gradients to zero
+        self.zero_grad()
+        #Do a backward pass to compute the Jacobian
+        #retain_graph is set to True as the auxiliary function is called multiple times.
+        output.backward(selector, retain_graph=True ) 
+
+        #Get grads
+        allParameterGrads_i = self.getGrads()
+        #Do inner prod 
+        vecMult_i = torch.dot(allParameterGrads_i, vec)
+
+        if not quadratic:
+            return vecMult_i
+        else:
+            #Concatenate all gradients 
+            return vecMult_i, torch.ger(allParameterGrads_i, allParameterGrads_i)
+    def vecMult(self, vec, output, quadratic=False):
+        "Multiply the Jacobian and the vector vec, if qudratic is True also compute the outer product of the Jacobian with itself."
+        bath_size, output_size = output.size()
+        prod = torch.zeros(output_size)
+        
+
+        for i in range(output_size):
+            if not quadratic:
+                prod[i] = self._vecMult_aux(vec, output, i, False)
+            else:
+                prod[i], outerProd_i = self._vecMult_aux(vec, output, i, True)
+                if i == 0:
+                    outerProd = outerProd_i
+                else:
+                    outerProd.add_( outerProd_i  )
+
+        if not quadratic:
+            return prod
+        else:
+            return prod, outerProd
     def forward(self, X):
         "Given an input X execute a forward pass."
         pass
@@ -21,71 +83,12 @@ class AEC(LossFunction):
         self.m = m
         self.m_prime = m_prime
         self.fc1 = nn.Linear(m, m_prime) 
-        self.fc2 = nn.Linear(m_prime, m) 
+    #    self.fc2 = nn.Linear(m_prime, m) 
     def forward(self, X):
         "Given an input X execute a forward pass."
         X = torch.sigmoid( self.fc1(X) )
-        X = self.fc2(X)
+    #    X = self.fc2(X)
         return X
-    def set(self, θ):
-        "Set model parameters."
-        ind = 0
-        for parameter in self.parameters():
-            if parameter.size() != θ[ind].size():
-                print(ind)
-                print (parameter.size(), θ[ind].size())
-                raise Exception('Dimensions do not match')
-            parameter.data =  θ[ind].data
-            ind += 1
-    def _vecMult_aux(self, vec, output, i, quadratic=False):
-        """Multiply the Jacobian and the vector vec, if qudratic is True also compute the outer product of the Jacobian with itself. 
-          The Jacobian is computed  ONLY w.r.t. i-th neuron in the output."""
-        selctor = np.zeros(self.m)
-        selctor[i] = 1
-        selector = torch.tensor( selctor  )
-        selector =  selector.view(1, -1)
-        #Reset gradients to zero
-        self.zero_grad()
-        #Do a backward pass to compute the Jacobian
-        #retain_graph is set to True as the auxiliary function is called multiple times.
-        output.backward( selector ,retain_graph=True ) 
-        #Compute grad w.r.t. parameters
-        grad_i = 0.0
-        if quadratic:
-            outerProdAllParameters_i = []
-        index = 0
-        for parameter in self.parameters():
-            grad_i += torch.dot(parameter.grad.view(-1), vec[index].view(-1) )
-            index += 1
-            if quadratic:
-                #Compute the outer product.
-                outerProdAllParameters_i.append( torch.ger( parameter.grad.view(-1), parameter.grad.view(-1) )  )
-                
-        if not quadratic:
-            return grad_i
-        else:
-            return grad_i, outerProdAllParameters_i
-    def vecMult(self, vec, output, quadratic=False):
-        "Multiply the Jacobian and the vector vec, if qudratic is True also compute the outer product of the Jacobian with itself."
-        bath_size, output_size = output.size()
-        prod = torch.zeros(output_size)
-        
-
-        for i in range(output_size):
-            if not quadratic:
-                prod[i] = self._vecMult_aux(vec, output, i, False)
-            else:
-                prod[i], outerProdAllParameters_i = self._vecMult_aux(vec, output, i, True)
-                if i == 0:
-                    outerProdAllParameters_tot = outerProdAllParameters_i
-                else:
-                    for j  in range(len( outerProdAllParameters_i   )):
-                        outerProdAllParameters_tot[j].add_( outerProdAllParameters_i[j]   )
-
-        if not quadratic:
-            return prod
-        else:
-            return prod, outerProdAllParameters_tot
 
 
        
@@ -112,8 +115,13 @@ if __name__ == "__main__":
 
     AE.zero_grad()
     sample_output = AE(sample_input)
-    prod, outerProdAllParameters_tot = AE.vecMult( list(AE.parameters() ), sample_output, True)
-    print(outerProdAllParameters_tot)
+
+    model_parameters = AE.getParameters()
+    vec = torch.randn(model_parameters.size() )
+    for parm in AE.parameters():
+        print (parm)
+    
+    prod, outerProdAllParameters_tot = AE.vecMult(vec , sample_output, True)
 
     
     
