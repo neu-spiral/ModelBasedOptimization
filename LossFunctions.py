@@ -26,11 +26,7 @@ class LossFunction(nn.Module):
             parameter.data =  θ[ind].data
             ind += 1
 
-    def _vecMult_aux(self, vec, output, i, quadratic=False):
-        """Multiply the Jacobian and the vector (1-d tensor) vec, if qudratic is True also compute the outer product of the Jacobian with itself. 
-          The Jacobian is computed  ONLY w.r.t. i-th neuron in the output."""
-
-        
+    def _getJacobian_aux(self, output, i):
         #Compute the i-th column in the Jacobian matrix, i.e., the grdaient of the i-th neuron in the output layer w.r.t. model parameters
         selctor = np.zeros( output.size()[-1]  )
         selctor[i] = 1
@@ -40,10 +36,38 @@ class LossFunction(nn.Module):
         self.zero_grad()
         #Do a backward pass to compute the Jacobian
         #retain_graph is set to True as the auxiliary function is called multiple times.
-        output.backward(selector, retain_graph=True ) 
-
+        output.backward(selector, retain_graph=True )
         #Get grads
-        allParameterGrads_i = self.getGrads()
+        return  self.getGrads()
+
+            
+
+    def getJacobian(self, output, quadratic=False):
+        
+        for i in range(output_size):
+            Jacobian_i_row = self._getJacobian_aux(output, i, quadratic)    
+            if  i == 0:
+                Jacobian = Jacobian_i_row
+                if quadratic:
+                    SquaredJacobian = torch.ger(Jacobian_i_row, Jacobian_i_row)
+            else:
+                Jacobian = torch.cat(Jacobian, Jacobian_i_row, dim=0) 
+                if quadratic:
+                     SquaredJacobian += torch.ger(Jacobian_i_row, Jacobian_i_row)
+        if not quadratic:
+            return Jacobian
+        return Jacobian, SquaredJacobian
+                    
+                    
+             
+            
+            
+        
+    def _vecMult_aux(self, vec, output, i, quadratic=False):
+        """Multiply the Jacobian and the vector (1-d tensor) vec, if qudratic is True also compute the outer product of the Jacobian with itself. 
+          The Jacobian is computed  ONLY w.r.t. i-th neuron in the output."""
+
+        
         #Do inner prod 
         vecMult_i = torch.dot(allParameterGrads_i, vec)
 
@@ -52,26 +76,18 @@ class LossFunction(nn.Module):
         else:
             #Concatenate all gradients 
             return vecMult_i, torch.ger(allParameterGrads_i, allParameterGrads_i)
-    def vecMult(self, vec, output, quadratic=False):
-        "Multiply the Jacobian and the vector vec, if qudratic is True also compute the outer product of the Jacobian with itself."
+    def vecMult(self, vec, output):
+        "Multiply the Jacobian and the vector vec, if qudratic is True also compute the outer product of the Jacobian with itself. Note that output must have batch dimension of 1."
         bath_size, output_size = output.size()
-        prod = torch.zeros(output_size)
+        if bath_size != 1:
+             raise Exception('Batch dimension is not equal to one.')
+        prod = []
         
 
         for i in range(output_size):
-            if not quadratic:
-                prod[i] = self._vecMult_aux(vec, output, i, False)
-            else:
-                prod[i], outerProd_i = self._vecMult_aux(vec, output, i, True)
-                if i == 0:
-                    outerProd = outerProd_i
-                else:
-                    outerProd.add_( outerProd_i  )
+            prod.append(self._vecMult_aux(vec, output, i, False))
+        return torch.tensor(prod)
 
-        if not quadratic:
-            return prod
-        else:
-            return prod, outerProd
     def forward(self, X):
         "Given an input X execute a forward pass."
         pass
@@ -116,12 +132,14 @@ if __name__ == "__main__":
     AE.zero_grad()
     sample_output = AE(sample_input)
 
+    
     model_parameters = AE.getParameters()
     vec = torch.randn(model_parameters.size() )
-    for parm in AE.parameters():
-        print (parm)
+    #for parm in AE.parameters():
+    #    print (parm)
     
     prod, outerProdAllParameters_tot = AE.vecMult(vec , sample_output, True)
+    print (prod)
 
     
     
