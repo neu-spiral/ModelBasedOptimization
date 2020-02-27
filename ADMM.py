@@ -6,9 +6,11 @@ class ADMM():
         self.rho = rho
         self.lossFunc = lossFunc
         self.Input = Input
-    def getVARS(self):
         #Outputs is the functions evaluated after a fowrard pass. 
         self.Outputs = self.lossFunc( self.Input )
+        
+        
+    def getVARS(self):
         #Initialize Y
         self.Y = self.Outputs
         #Initialize theta
@@ -23,6 +25,8 @@ class ADMM():
         for j in range(batch_size):
             vecJacobMult_j = self.lossFunc.vecMult(vec, self.Outputs[j,:])
             Y_j = pNormProxOp(vecJacobMult_j + self.Outputs[l,:] - self.U) 
+            self.Y[j,:] = Y_j
+        
          
     def solve(self):
         self.Y = self.updateY()

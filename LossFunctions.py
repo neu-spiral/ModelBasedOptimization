@@ -1,4 +1,7 @@
 import torch
+from torch.multiprocessing import Process
+import os
+import torch.distributed as dist
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as FUNC
@@ -16,80 +19,110 @@ class LossFunction(nn.Module):
         return torch.cat( [parameter.view(-1) for parameter in self.parameters()] ) 
     def getGrads(self):
         "Return gradient w.r.t. model parameters of all model layers  as a single vectorized tensor."
-        return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()] )   
-    def set(self, θ):
-        "Set model parameters."
+        return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()] ).unsqueeze(0)   
+    def setParameters(self, params):
+        """Set model parameters."""
+
         ind = 0
         for parameter in self.parameters():
-            if parameter.size() != θ[ind].size():
+            if parameter.size() != params[ind].size():
                 raise Exception('Dimensions do not match')
-            parameter.data =  θ[ind].data
+            parameter.data =  params[ind].data
             ind += 1
 
-    def _getJacobian_aux(self, output, i):
+
+    def _getJacobian_aux(self, output, i, device=torch.device("cpu")):
+        """
+          Return the i-th row of the Jacobian, i.e., the gradient of the i-th node in the output layer, w.r.t. network paraneters
+
+          evaluated for output
+        """
         #Compute the i-th column in the Jacobian matrix, i.e., the grdaient of the i-th neuron in the output layer w.r.t. model parameters
         selctor = np.zeros( output.size()[-1]  )
         selctor[i] = 1
         selector = torch.tensor( selctor  )
         selector =  selector.view(1, -1)
+        selector = selector.to(device) 
         #Reset gradients to zero
         self.zero_grad()
         #Do a backward pass to compute the Jacobian
         #retain_graph is set to True as the auxiliary function is called multiple times.
+        
         output.backward(selector, retain_graph=True )
         #Get grads
         return  self.getGrads()
 
             
 
-    def getJacobian(self, output, quadratic=False):
-        
+    def getJacobian(self, output, quadratic=False, device=torch.device("cpu")):
+        """
+            Return the Jacobian matrix evaluauted at output, if quadratic is True, the  it also return the suared of the Jacobian. 
+        """
+
+        bath_size, output_size = output.size()    
+        if bath_size != 1:
+             raise Exception('Batch dimension is not equal to one.')
         for i in range(output_size):
-            Jacobian_i_row = self._getJacobian_aux(output, i, quadratic)    
+            Jacobian_i_row = self._getJacobian_aux(output, i, device)
             if  i == 0:
                 Jacobian = Jacobian_i_row
                 if quadratic:
-                    SquaredJacobian = torch.ger(Jacobian_i_row, Jacobian_i_row)
+                    SquaredJacobian = torch.ger(Jacobian_i_row.squeeze(0), Jacobian_i_row.squeeze(0))
             else:
-                Jacobian = torch.cat(Jacobian, Jacobian_i_row, dim=0) 
+                Jacobian = torch.cat((Jacobian, Jacobian_i_row), dim=0) 
                 if quadratic:
-                     SquaredJacobian += torch.ger(Jacobian_i_row, Jacobian_i_row)
+                     SquaredJacobian += torch.ger(Jacobian_i_row.squeeze(0), Jacobian_i_row.squeeze(0))
         if not quadratic:
             return Jacobian
         return Jacobian, SquaredJacobian
-                    
+    
+ ###NOT IMPLEMENTED 
+    def getParallelJacobian(self, Input, size=10):
+        """Return the Jacobian, computed in parallel."""
+        def fn(rank, size):
+            print (f"rank and size are {rank} and {size}")
+            r = 9 
+
+        def init_process(rank, size, fn, backend='gloo'):
+            """ Initialize the distributed environment. """
+            os.environ['MASTER_ADDR'] = '127.0.0.1'
+            os.environ['MASTER_PORT'] = '29500'
+            dist.init_process_group(backend, rank=rank, world_size=size)
+            fn(rank, size)
+    
+        processes = []
+        for rank in range(size):
+            p = Process(target=init_process, args=(rank, size, fn))
+            p.start()
+            processes.append(p)
+
+        for prorcess in processes:
+            prorcess.join()
+###END NOT IMPLEMENTED             
                     
              
             
             
         
-    def _vecMult_aux(self, vec, output, i, quadratic=False):
-        """Multiply the Jacobian and the vector (1-d tensor) vec, if qudratic is True also compute the outer product of the Jacobian with itself. 
-          The Jacobian is computed  ONLY w.r.t. i-th neuron in the output."""
+    def vecMult(self, vec, output=None, Jacobian=None):
+        """
+           Multiply the Jacobian and the vector vec. Note that output must have batch dimension of 1.
+        """
 
-        
-        #Do inner prod 
-        vecMult_i = torch.dot(allParameterGrads_i, vec)
-
-        if not quadratic:
-            return vecMult_i
-        else:
-            #Concatenate all gradients 
-            return vecMult_i, torch.ger(allParameterGrads_i, allParameterGrads_i)
-    def vecMult(self, vec, output):
-        "Multiply the Jacobian and the vector vec, if qudratic is True also compute the outer product of the Jacobian with itself. Note that output must have batch dimension of 1."
         bath_size, output_size = output.size()
         if bath_size != 1:
              raise Exception('Batch dimension is not equal to one.')
-        prod = []
-        
 
-        for i in range(output_size):
-            prod.append(self._vecMult_aux(vec, output, i, False))
-        return torch.tensor(prod)
+
+        if Jacobian == None:
+            if output == None:
+                raise Exception('Neither output nor Jacobian is passed.')
+            Jacobian = self.getJacobian(output)
+
+        return torch.ger(Jacobian, vec)
 
     def forward(self, X):
-        "Given an input X execute a forward pass."
+        """Given an input X execute a forward pass."""
         pass
 
 class AEC(LossFunction):
@@ -135,11 +168,10 @@ if __name__ == "__main__":
     
     model_parameters = AE.getParameters()
     vec = torch.randn(model_parameters.size() )
-    #for parm in AE.parameters():
-    #    print (parm)
     
-    prod, outerProdAllParameters_tot = AE.vecMult(vec , sample_output, True)
-    print (prod)
+    AE.getParallelJacobian(sample_input, size=4)
+   # Jac, sqJac = AE.getJacobian(sample_output, True)
+    
 
     
     
