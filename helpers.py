@@ -27,12 +27,16 @@ def pNormProxOp(V, rho, p=2, eps=1.e-9):
 
     V = V.squeeze(0)
 
+    if p == 2:
+        return EuclidianProxOp(V, rho)
     signs = torch.sign(V)
     V_normalized = rho * torch.abs(V)
     vec_size = V_normalized.size()[0]
     q =  p/(p-1.)
     if torch.norm(V_normalized, p=q) < 1:
-        return torch.zeros( vec_size )
+        U = torch.zeros( vec_size )
+        U = U.unsqueeze(0)
+        return U 
     upper_bound = torch.norm(V_normalized, p=p)
     lower_bound = 0.0
     U =  torch.zeros( vec_size )

@@ -59,11 +59,11 @@ class LossFunction(nn.Module):
         selector = selector.to(device) 
         #Reset gradients to zero
         self.zero_grad()
+
         #Do a backward pass to compute the Jacobian
         #retain_graph is set to True as the auxiliary function is called multiple times.
-        
-      
         output.backward(selector, retain_graph=True )
+
         #Get grads
         return  self.getGrads()
 

@@ -11,8 +11,10 @@ from helpers import pNormProxOp
 
 class ADMM():
     "ADMM Solver"
-    def __init__(self, data, model=None, rho=1.0):
+    def __init__(self, data, model=None, rho=1.0, squaredConst=1.0):
         self.rho = rho
+        self.squaredConst  = squaredConst  
+        self.regularizerCoeff =  0.0
         self.model = model 
         #Outputs is the functions evaluated after a fowrard pass. 
         #* NOTE: data has the batch dimenion equal to one. 
@@ -22,10 +24,11 @@ class ADMM():
         self.data = data
         
         self.output = self.model( self.data )
-        self.convexSolvers = solveConvex()
+        self.convexSolver = solveConvex()
 
         #Initialize variables.
         self._setVARS() 
+
         
     @torch.no_grad()    
     def _setVARS(self):
@@ -36,15 +39,22 @@ class ADMM():
         self.primalY = self.output
         #Initialize theta
         self.Theta_k = self.model.getParameters()
+
+        #set dimensions
+        self.dim_d = self.Theta_k.size()[-1]
+        self.dim_N = self.output.size()[1]
+      
         self.primalTheta = self.Theta_k
         #Initialize dual vars U
         self.dual = torch.zeros( self.primalY.size() )
+      
        
         #Compute Jacobian
         Jac, sqJac = self.model.getJacobian(self.output, quadratic=True)
        
         self.Jac = Jac
-        self.second_ord = sqJac
+        self.squaredJac = sqJac
+        
         
     @torch.no_grad()
     def updateYAdaptDuals(self):
@@ -55,10 +65,14 @@ class ADMM():
         #vecJacobMult_j = self.model.vecMult(vec, Jacobian=self.Jac)
         vecJacobMult_j = torch.matmul(vec, self.Jac.T)
 
+        #Primal residual
+        PRES = self.primalY - self.output - vecJacobMult_j
         #Adapt duals
-        self.dual += ( self.primalY - self.output - vecJacobMult_j )
+        self.dual += PRES 
+        oldPrimalY =  self.primalY
         #Update Y 
         self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho) 
+        return  torch.norm(oldPrimalY - self.primalY), PRES
 
 
     @torch.no_grad()   
@@ -68,35 +82,48 @@ class ADMM():
         """ 
         
         self.U_hat = self.dual + self.primalY - self.output + torch.matmul(self.Theta_k, self.Jac.T)
-        first_ord = torch.matmul(self.U_hat, self.Jac) 
-        
-        return self.rho * first_ord, self.rho * self.second_ord
+        first_ord = self.rho * torch.matmul(self.U_hat, self.Jac) 
+        second_ord = self.rho * self.squaredJac 
+
+        return first_ord, second_ord
 
     @torch.no_grad()
     def updateTheta(self, first_ord, second_ord):
         """
             Update theta by solving the convex problem
         """
+        
+        oldPrimalTheta = self.primalTheta
+        b = first_ord + self.squaredConst * self.Theta_k
+        A = second_ord.unsqueeze(0) + (self.squaredConst + self.regularizerCoeff) * torch.eye( self.dim_d ).unsqueeze(0)
+        #Solve the convex problem  
+        self.primalTheta = self.convexSolver.solve(A=A, b=b)
+        return torch.norm(oldPrimalTheta - self.primalTheta)
    
-        first_ord.detach()
-        second_ord.detach()
-        self.primalTheta = self.convexSolvers.solve(first_ord, second_ord, self.Theta_k)
-
+        
         
 
 class solveConvex():
     def __init__(self):
         """
            Solve the following convex problem:
-                 Minimize:      0.5 * theta^T * second_ord * theta  -  theta^T * u_hat + 0.5 \|theta - theta_k \|_2^2 
-                 Subj. to: theta \in R^d
+                 Minimize:  g(theta) + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
+                 Subj. to:  theta \in C,
+           here in the basic version the function g is zero (non-existenet) and the set C is alli the space of all real vectors. 
         """
-
+        pass 
          
-    def solve(self, first_ord, second_ord, theta_k):
-        A = second_ord + torch.eye( theta_k.size()[0] )
-        b = theta_k + first_ord
-        np.linalg.solve(A,b)
+    def solve(self, A, b):
+        b = b.T.unsqueeze(0)
+        sol, LUdecomp = torch.solve(b, A)
+        
+        #test
+       # A = A.squeeze(0)
+       # b = b.squeeze(0)
+       # sol = sol.squeeze(0)
+        #print (torch.matmul(A, sol) - b)
+  
+        return sol.squeeze(2)
         
          
 
@@ -106,7 +133,7 @@ if __name__ == "__main__":
     parser.add_argument("--input_file", type=str)
     parser.add_argument("--m", type=int, default=10)
     parser.add_argument("--m_prime", type=int,  default=2)
-    parser.add_argument("--iterations", type=int,  default=20)
+    parser.add_argument("--iterations", type=int,  default=10)
     parser.add_argument("--logfile", type=str,default="serial.log")
     args = parser.parse_args()
 
@@ -129,20 +156,27 @@ if __name__ == "__main__":
 
 
     for k in range(args.iterations):
-        i = 0
              
         #Update Y and adapt duals for each solver 
         for ADMMsolver in ADMMsolvers:
-            ADMMsolver.updateYAdaptDuals()
+            DRES, PRES = ADMMsolver.updateYAdaptDuals()
             first_ord, second_ord =  ADMMsolver.getCoeefficients()
             
-            if i==0:
-                first_ord_TOT = first_ord
-                second_ord_TOT = second_ord
-            else:
+            try:
                 first_ord_TOT  += first_ord
                 second_ord_TOT += second_ord
+                PRES_TOT += PRES
+                DRES_TOT += DRES
+           
+            except NameError:
+                first_ord_TOT = first_ord
+                second_ord_TOT = second_ord
+                PRES_TOT = PRES
+                DRES_TOT = DRES
+        print ("Iter ", k, " PRES ", PRES_TOT, " DRES ", DRES_TOT)
         #Aggregate first order and the scond order terms and solve the convex problem for theta
-      #  ADMMsolver_i = ADMMsolvers[0]
-      #  ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
-        break
+        ADMMsolver_i = ADMMsolvers[0]
+        ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
+         
+
+
