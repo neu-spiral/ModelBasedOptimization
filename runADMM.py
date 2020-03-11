@@ -63,6 +63,7 @@ def runADMM(ADMMsolvers, rank, iterations=10):
         second_ord_TOT = 0.0
 
         #Update Y and adapt duals for each solver 
+        last = time.time()
         for ADMMsolver in ADMMsolvers:
             DRES, PRES = ADMMsolver.updateYAdaptDuals()
             first_ord, second_ord =  ADMMsolver.getCoeefficients()
@@ -74,11 +75,16 @@ def runADMM(ADMMsolvers, rank, iterations=10):
             first_ord_TOT  += first_ord
             second_ord_TOT += second_ord
 
+        now = time.time()
+        print ('Loop took {} (s)'.format(now - last) )
         #Aggregate first_ord_TOT and second_ord_TOT across processes
+        now = time.time()
         torch.distributed.reduce(first_ord_TOT, 0) 
         torch.distributed.reduce(second_ord_TOT, 0)
         torch.distributed.reduce(PRES_TOT, 0)
         torch.distributed.reduce(DRES_TOT, 0)
+        torch.distributed.reduce(OBJ_TOT, 0)
+        print ('Reduction took {}(s)'.format(time.time() - now))
         
         #Compute Theta (proc 0 is responsible for this)
         if rank == 0:
@@ -86,16 +92,20 @@ def runADMM(ADMMsolvers, rank, iterations=10):
             DRES_theta = ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
             DRES_TOT += DRES_theta
 
+            
+            logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, time.time() - t_start, OBJ_TOT ))
+            logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
+
+        last = time.time()
         #broadcast the updated Theta 
         torch.distributed.broadcast(ADMMsolvers[0].primalTheta, 0)
+        now = time.time()
+        print ('Broadcast took {}(s)'.format(now - last))
 
         #update Theta for the rest of the solvers across processes
         for ADMMsolver in ADMMsolvers[1:]:
              ADMMsolvers[0].updateTheta(first_ord_TOT, second_ord_TOT, ADMMsolvers[0].primalTheta)
-        t_end = time.time()
 
-        logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, t_end - t_start, OBJ_TOT ))
-        logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
         
 
 
@@ -104,8 +114,8 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_rank", type=int)
     parser.add_argument("--input_file", type=str)
-    parser.add_argument("--m", type=int, default=10)
-    parser.add_argument("--m_prime", type=int,  default=2)
+    parser.add_argument("--m", type=int, default=100)
+    parser.add_argument("--m_prime", type=int,  default=5)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--iterations", type=int,  default=10)
     args = parser.parse_args()
