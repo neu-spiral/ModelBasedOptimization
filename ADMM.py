@@ -1,18 +1,20 @@
 import argparse 
+import time
 import logging
 import numpy as np
 import logging
 from LossFunctions import AEC
 from torch.utils.data import Dataset, DataLoader
 import torch
-from helpers import pNormProxOp
+from helpers import pNormProxOp, clearFile
 
 #torch.manual_seed(1993)
 
 class ADMM():
     "ADMM Solver"
-    def __init__(self, data, model=None, rho=1.0, squaredConst=1.0):
+    def __init__(self, data, model=None, rho=5.0, p=2, squaredConst=1.0):
         self.rho = rho
+        self.p = p
         self.squaredConst  = squaredConst  
         self.regularizerCoeff =  0.0
         self.model = model 
@@ -20,11 +22,13 @@ class ADMM():
         #* NOTE: data has the batch dimenion equal to one. 
         b_size = data.size()[0]
         if b_size !=1 :
-            raise Exception("batch dimenion is not one. Aborting the algorithm.")
+            raise Exception("batch dimenion is not one, aborting the execution.")
         self.data = data
         
         self.output = self.model( self.data )
         self.convexSolver = solveConvex()
+
+        self.use_cuda = torch.cuda.is_available()
 
         #Initialize variables.
         self._setVARS() 
@@ -47,6 +51,8 @@ class ADMM():
         self.primalTheta = self.Theta_k
         #Initialize dual vars U
         self.dual = torch.zeros( self.primalY.size() )
+        if self.use_cuda:
+            self.dual = self.dual.cuda()
       
        
         #Compute Jacobian
@@ -65,14 +71,18 @@ class ADMM():
         #vecJacobMult_j = self.model.vecMult(vec, Jacobian=self.Jac)
         vecJacobMult_j = torch.matmul(vec, self.Jac.T)
 
+
         #Primal residual
         PRES = self.primalY - self.output - vecJacobMult_j
         #Adapt duals
         self.dual += PRES 
         oldPrimalY =  self.primalY
         #Update Y 
-        self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho) 
-        return  torch.norm(oldPrimalY - self.primalY), PRES
+        self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho, p=self.p) 
+        if self.use_cuda:
+            self.primalY = self.primalY.cuda()
+
+        return  torch.norm(oldPrimalY - self.primalY), torch.norm(PRES)
 
 
     @torch.no_grad()   
@@ -88,18 +98,37 @@ class ADMM():
         return first_ord, second_ord
 
     @torch.no_grad()
-    def updateTheta(self, first_ord, second_ord):
+    def updateTheta(self, first_ord, second_ord, newTheta=None):
         """
             Update theta by solving the convex problem
         """
         
+        if newTheta is not None:
+            self.primalTheta = newTheta
+            return 0.0
         oldPrimalTheta = self.primalTheta
         b = first_ord + self.squaredConst * self.Theta_k
-        A = second_ord.unsqueeze(0) + (self.squaredConst + self.regularizerCoeff) * torch.eye( self.dim_d ).unsqueeze(0)
+
+        scaledI = (self.squaredConst + self.regularizerCoeff) * torch.eye( self.dim_d ).unsqueeze(0)
+        if self.use_cuda:
+            scaledI = scaledI.cuda()
+
+        A = second_ord.unsqueeze(0) + scaledI
+
         #Solve the convex problem  
         self.primalTheta = self.convexSolver.solve(A=A, b=b)
+       # print ( torch.matmul(A, self.primalTheta.T) - b.T )
         return torch.norm(oldPrimalTheta - self.primalTheta)
+
+
+    @torch.no_grad()
+    def getObjective(self):
+        """
+           Compute the objective.
+        """
    
+        return torch.norm( self.primalY, p=self.p )
+    
         
         
 
@@ -135,9 +164,11 @@ if __name__ == "__main__":
     parser.add_argument("--m_prime", type=int,  default=2)
     parser.add_argument("--iterations", type=int,  default=10)
     parser.add_argument("--logfile", type=str,default="serial.log")
+    parser.add_argument("--rho", type=float, default=1.0)
     args = parser.parse_args()
 
 
+    clearFile( args.logfile  )
     logging.basicConfig(filename=args.logfile, level=logging.INFO)
 
     #Load dataset
@@ -149,34 +180,41 @@ if __name__ == "__main__":
     #Instansiate ADMMsolvres
     ADMMsolvers = []
     for data in data_loader:
-        ADMMsolver = ADMM(data, model)
+        ADMMsolver = ADMM(data, model, rho=args.rho)
         ADMMsolvers.append(ADMMsolver)
-
     logging.info("Initialized the ADMMsolvers for {} datapoints".format(len(ADMMsolvers)) )
 
-
+    #ADMM iterations 
     for k in range(args.iterations):
-             
+        t_start = time.time()
+        PRES_TOT = 0.0
+        DRES_TOT = 0.0              
+        OBJ_TOT = 0.5 * torch.norm(ADMMsolvers[0].primalTheta - ADMMsolvers[0].Theta_k) ** 2 
+        first_ord_TOT = 0.0
+        second_ord_TOT = 0.0 
         #Update Y and adapt duals for each solver 
         for ADMMsolver in ADMMsolvers:
             DRES, PRES = ADMMsolver.updateYAdaptDuals()
             first_ord, second_ord =  ADMMsolver.getCoeefficients()
-            
-            try:
-                first_ord_TOT  += first_ord
-                second_ord_TOT += second_ord
-                PRES_TOT += PRES
-                DRES_TOT += DRES
+
+            OBJ_TOT += ADMMsolver.getObjective()
+            PRES_TOT += PRES
+            DRES_TOT += DRES        
+
+            first_ord_TOT  += first_ord
+            second_ord_TOT += second_ord
            
-            except NameError:
-                first_ord_TOT = first_ord
-                second_ord_TOT = second_ord
-                PRES_TOT = PRES
-                DRES_TOT = DRES
-        print ("Iter ", k, " PRES ", PRES_TOT, " DRES ", DRES_TOT)
+
         #Aggregate first order and the scond order terms and solve the convex problem for theta
         ADMMsolver_i = ADMMsolvers[0]
-        ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
+        DRES_theta = ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
+        DRES_TOT += DRES_theta
+        for ADMMsolver in ADMMsolvers[1:]:
+            ADMMsolver_i.updateTheta( first_ord_TOT, second_ord_TOT, ADMMsolvers[0].primalTheta) 
+     
+        t_end = time.time()
+        logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, t_end - t_start, OBJ_TOT ))
+        logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
          
 
 

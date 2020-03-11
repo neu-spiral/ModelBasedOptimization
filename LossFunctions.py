@@ -10,9 +10,10 @@ import torch.nn.functional as FUNC
 
 class LossFunction(nn.Module):
     "A generic class written for definiing a loss function F(θ; X) where X is the input data and θ is the parametr."
-    def __init__(self):
+    def __init__(self, device):
         print("Initializing LossFunction.")
         super(LossFunction, self).__init__()
+        self.device = device
 
     @torch.no_grad()
     def getParameters(self):
@@ -35,17 +36,19 @@ class LossFunction(nn.Module):
     @torch.no_grad()
     def setParameters(self, params):
         """Set model parameters."""
-
-        ind = 0
-        for parameter in self.parameters():
-            if parameter.size() != params[ind].size():
-                raise Exception('Dimensions do not match')
-            parameter.data =  params[ind].data
-            ind += 1
-
+   
+        new_parameters = params.squeeze(0)
+        last_Index = 0
+        for name, param in self.named_parameters():
+            param_size_tot = 1
+            for parm_size in param.size():
+                param_size_tot *= parm_size
+            param.copy_(new_parameters[last_Index: param_size_tot + last_Index].view( param.size()  ) )
+            last_Index = param_size_tot
+            
 
     @torch.no_grad()
-    def _getJacobian_aux(self, output, i, device=torch.device("cpu")):
+    def _getJacobian_aux(self, output, i):
         """
           Return the i-th row of the Jacobian, i.e., the gradient of the i-th node in the output layer, w.r.t. network paraneters
 
@@ -56,7 +59,7 @@ class LossFunction(nn.Module):
         selctor[i] = 1
         selector = torch.tensor( selctor  )
         selector =  selector.view(1, -1)
-        selector = selector.to(device) 
+        selector = selector.to(self.device) 
         #Reset gradients to zero
         self.zero_grad()
 
@@ -69,7 +72,7 @@ class LossFunction(nn.Module):
 
             
     @torch.no_grad()
-    def getJacobian(self, output, quadratic=False, device=torch.device("cpu")):
+    def getJacobian(self, output, quadratic=False):
         """
             Return the Jacobian matrix evaluauted at output, if quadratic is True, the  it also return the suared of the Jacobian. 
         """
@@ -78,7 +81,7 @@ class LossFunction(nn.Module):
         if bath_size != 1:
              raise Exception('Batch dimension is not equal to one.')
         for i in range(output_size):
-            Jacobian_i_row = self._getJacobian_aux(output, i, device)
+            Jacobian_i_row = self._getJacobian_aux(output, i)
             if  i == 0:
                 Jacobian = Jacobian_i_row
                 if quadratic:
@@ -123,8 +126,8 @@ class LossFunction(nn.Module):
 
 class AEC(LossFunction):
     "A class for Autoencoders; the input size is m anbd the encoded size is m_prime."
-    def __init__(self, m , m_prime):
-        super(AEC, self).__init__()
+    def __init__(self, m , m_prime, device=torch.device("cpu")):
+        super(AEC, self).__init__(device)
         self.m = m
         self.m_prime = m_prime
         self.fc1 = nn.Linear(m, m_prime) 
