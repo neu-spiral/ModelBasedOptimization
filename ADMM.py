@@ -12,12 +12,16 @@ from helpers import pNormProxOp, clearFile
 
 class ADMM():
     "ADMM Solver"
-    def __init__(self, data, model=None, rho=5.0, p=2, squaredConst=1.0):
+    def __init__(self, data, model_spec=None, rho=5.0, p=2, squaredConst=1.0, regularizerCoeff=0.0, model=None):
         self.rho = rho
         self.p = p
         self.squaredConst  = squaredConst  
-        self.regularizerCoeff =  0.0
-        self.model = model 
+        self.regularizerCoeff =  regularizerCoeff
+
+        if model is None:
+            self.model = model_spec['loss']( model_spec['parameter_dim'][0],  model_spec['parameter_dim'][1] )
+        else:
+            self.model = model
         #Outputs is the functions evaluated after a fowrard pass. 
         #* NOTE: data has the batch dimenion equal to one. 
         b_size = data.size()[0]
@@ -25,20 +29,23 @@ class ADMM():
             raise Exception("batch dimenion is not one, aborting the execution.")
         self.data = data
         
-        self.output = self.model( self.data )
         self.convexSolver = solveConvex()
 
         self.use_cuda = torch.cuda.is_available()
 
+        if self.use_cuda:
+            self.model.cuda()
         #Initialize variables.
         self._setVARS() 
 
         
-    @torch.no_grad()    
+   # @torch.no_grad()    
     def _setVARS(self):
         """
            Initialize primal, dual and auxiliary variables.
         """
+
+        self.output = self.model( self.data )
         #Initialize Y
         self.primalY = self.output
         #Initialize theta
@@ -136,8 +143,8 @@ class solveConvex():
     def __init__(self):
         """
            Solve the following convex problem:
-                 Minimize:  g(theta) + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
-                 Subj. to:  theta \in C,
+                 Minimize: ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
+                 Subj. to:  theta \in Reals,
            here in the basic version the function g is zero (non-existenet) and the set C is alli the space of all real vectors. 
         """
         pass 

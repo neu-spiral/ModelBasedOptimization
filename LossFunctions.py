@@ -11,7 +11,6 @@ import torch.nn.functional as FUNC
 class LossFunction(nn.Module):
     "A generic class written for definiing a loss function F(θ; X) where X is the input data and θ is the parametr."
     def __init__(self, device):
-        print("Initializing LossFunction.")
         super(LossFunction, self).__init__()
         self.device = device
 
