@@ -19,9 +19,12 @@ class ADMM():
         self.regularizerCoeff =  regularizerCoeff
 
         if model is None:
+            #model_spec is a dictionary with 'loss' dtermines the loss function and 'parameter_dim' determines the dimensions. 
             self.model = model_spec['loss']( model_spec['parameter_dim'][0],  model_spec['parameter_dim'][1] )
         else:
             self.model = model
+
+
         #Outputs is the functions evaluated after a fowrard pass. 
         #* NOTE: data has the batch dimenion equal to one. 
         b_size = data.size()[0]
@@ -29,28 +32,31 @@ class ADMM():
             raise Exception("batch dimenion is not one, aborting the execution.")
         self.data = data
         
-        self.convexSolver = solveConvex()
+        self.convexSolver = solveQuadratic( self.regularizerCoeff )
 
         self.use_cuda = torch.cuda.is_available()
 
         if self.use_cuda:
             self.model.cuda()
+       
+
+
         #Initialize variables.
-        self._setVARS() 
+       # self._setVARS() 
 
         
    # @torch.no_grad()    
     def _setVARS(self):
         """
-           Initialize primal, dual and auxiliary variables.
+           Initialize primal, dual and auxiliary variables and compute Jacobian. 
         """
 
         self.output = self.model( self.data )
+        
         #Initialize Y
         self.primalY = self.output
         #Initialize theta
         self.Theta_k = self.model.getParameters()
-
         #set dimensions
         self.dim_d = self.Theta_k.size()[-1]
         self.dim_N = self.output.size()[1]
@@ -116,7 +122,7 @@ class ADMM():
         oldPrimalTheta = self.primalTheta
         b = first_ord + self.squaredConst * self.Theta_k
 
-        scaledI = (self.squaredConst + self.regularizerCoeff) * torch.eye( self.dim_d ).unsqueeze(0)
+        scaledI = self.squaredConst * torch.eye( self.dim_d ).unsqueeze(0)
         if self.use_cuda:
             scaledI = scaledI.cuda()
 
@@ -126,6 +132,12 @@ class ADMM():
         self.primalTheta = self.convexSolver.solve(A=A, b=b)
        # print ( torch.matmul(A, self.primalTheta.T) - b.T )
         return torch.norm(oldPrimalTheta - self.primalTheta)
+
+    def setModelParameters(self):
+        """
+           Set model paramaters.
+        """
+        self.model.setParameters( self.primalTheta  ) 
 
 
     @torch.no_grad()
@@ -139,17 +151,17 @@ class ADMM():
         
         
 
-class solveConvex():
-    def __init__(self):
+class solveQuadratic():
+    def __init__(self, quadCoeff=0.0):
         """
            Solve the following convex problem:
-                 Minimize: ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
+                 Minimize: quadCoeff * ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
                  Subj. to:  theta \in Reals,
-           here in the basic version the function g is zero (non-existenet) and the set C is alli the space of all real vectors. 
         """
-        pass 
-         
+        self.quadCoeff = quadCoeff 
     def solve(self, A, b):
+        
+        A += self.quadCoeff * torch.eye( A.size()[1]  )
         b = b.T.unsqueeze(0)
         sol, LUdecomp = torch.solve(b, A)
         
