@@ -12,17 +12,12 @@ from helpers import pNormProxOp, clearFile
 
 class ADMM():
     "ADMM Solver"
-    def __init__(self, data, model_spec=None, rho=5.0, p=2, squaredConst=1.0, regularizerCoeff=0.0, model=None):
+    def __init__(self, data, rho=5.0, p=2, squaredConst=1.0, regularizerCoeff=0.0, model=None):
         self.rho = rho
         self.p = p
         self.squaredConst  = squaredConst  
         self.regularizerCoeff =  regularizerCoeff
-
-        if model is None:
-            #model_spec is a dictionary with 'loss' dtermines the loss function and 'parameter_dim' determines the dimensions. 
-            self.model = model_spec['loss']( model_spec['parameter_dim'][0],  model_spec['parameter_dim'][1] )
-        else:
-            self.model = model
+        self.model = model
 
 
         #Outputs is the functions evaluated after a fowrard pass. 
@@ -42,7 +37,7 @@ class ADMM():
 
 
         #Initialize variables.
-       # self._setVARS() 
+        self._setVARS() 
 
         
    # @torch.no_grad()    
@@ -50,13 +45,19 @@ class ADMM():
         """
            Initialize primal, dual and auxiliary variables and compute Jacobian. 
         """
+        #Theta is the current model parameter
+        self.Theta_k = self.model.getParameters()
+        #Froward pass for data
+        self.output =  self.model( self.data )
+        #Compute Jacobian
+        with torch.no_grad():
+            Jac, sqJac = self.model.getJacobian(self.output, quadratic=True)
 
-        self.output = self.model( self.data )
-        
+            self.Jac = Jac
+            self.squaredJac = sqJac
+
         #Initialize Y
         self.primalY = self.output
-        #Initialize theta
-        self.Theta_k = self.model.getParameters()
         #set dimensions
         self.dim_d = self.Theta_k.size()[-1]
         self.dim_N = self.output.size()[1]
@@ -67,12 +68,6 @@ class ADMM():
         if self.use_cuda:
             self.dual = self.dual.cuda()
       
-       
-        #Compute Jacobian
-        Jac, sqJac = self.model.getJacobian(self.output, quadratic=True)
-       
-        self.Jac = Jac
-        self.squaredJac = sqJac
         
         
     @torch.no_grad()
@@ -103,7 +98,6 @@ class ADMM():
         """
             Return the coefficientes for the first order and the second order terms for updating primalTheta
         """ 
-        
         self.U_hat = self.dual + self.primalY - self.output + torch.matmul(self.Theta_k, self.Jac.T)
         first_ord = self.rho * torch.matmul(self.U_hat, self.Jac) 
         second_ord = self.rho * self.squaredJac 
@@ -133,20 +127,44 @@ class ADMM():
        # print ( torch.matmul(A, self.primalTheta.T) - b.T )
         return torch.norm(oldPrimalTheta - self.primalTheta)
 
-    def setModelParameters(self):
-        """
-           Set model paramaters.
-        """
-        self.model.setParameters( self.primalTheta  ) 
+
 
 
     @torch.no_grad()
     def getObjective(self):
         """
-           Compute the objective.
+           Compute the objective for ADMM iterations. 
         """
    
         return torch.norm( self.primalY, p=self.p )
+
+
+    @torch.no_grad()
+    def evalModelLoss(self, Theta=None):
+        """
+         Compute the model loss function, around Theta_k.
+        """
+
+        if Theta == None:
+            Theta = self.primalTheta 
+        vec = Theta - self.Theta_k
+        #vecJacobMult_j = self.model.vecMult(vec, Jacobian=self.Jac)
+        vecJacobMult_j = torch.matmul(vec, self.Jac.T)
+        return torch.norm(vecJacobMult_j + self.output, p=self.p)
+  
+    def evalModelDiscrepancy(self, Theta):
+        """
+            Compute the difference between the model loss and the loss evaluated at a given Theta.
+        """
+        modelLoss = self.evalModelLoss(Theta)
+        self.model.setParameters( Theta )
+        self.evalModel()
+        return abs(modelLoss - torch.norm(self.output, p=self.p) )
+         
+ 
+       
+    
+        
     
         
         

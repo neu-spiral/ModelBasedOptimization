@@ -1,4 +1,5 @@
 import torch
+import logging
 from torch.multiprocessing import Process
 import os
 import torch.distributed as dist
@@ -43,7 +44,8 @@ class LossFunction(nn.Module):
             for parm_size in param.size():
                 param_size_tot *= parm_size
             param.copy_(new_parameters[last_Index: param_size_tot + last_Index].view( param.size()  ) )
-            last_Index = param_size_tot
+            last_Index += param_size_tot
+        logging.warning("Model parameters modified.")
             
 
     @torch.no_grad()
@@ -130,12 +132,12 @@ class AEC(LossFunction):
         self.m = m
         self.m_prime = m_prime
         self.fc1 = nn.Linear(m, m_prime) 
-    #    self.fc2 = nn.Linear(m_prime, m) 
+        self.fc2 = nn.Linear(m_prime, m) 
     def forward(self, X):
         "Given an input X execute a forward pass."
-        X = torch.sigmoid( self.fc1(X) )
-    #    X = self.fc2(X)
-        return X
+        Y = torch.sigmoid( self.fc1(X) )
+        Y = self.fc2(Y)
+        return Y - X
 
 
        
@@ -157,17 +159,12 @@ if __name__ == "__main__":
   #  theta.append ( torch.randn(4))
   #  AE.set(theta)
 
-    selector = torch.tensor([1.0, 0.0], dtype=torch.float)
-    selector =  selector.view(1, -1)
-
-    AE.zero_grad()
-    sample_output = AE(sample_input)
-
-    
     model_parameters = AE.getParameters()
-    vec = torch.randn(model_parameters.size() )
-    
-    AE.getParallelJacobian(sample_input, size=4)
+    print (model_parameters )
+
+    AE.setParameters( model_parameters )
+    model_parameters = AE.getParameters()
+    print (model_parameters )   #, dict(AE.named_parameters()) )
    # Jac, sqJac = AE.getJacobian(sample_output, True)
     
 
