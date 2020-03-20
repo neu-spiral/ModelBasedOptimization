@@ -40,7 +40,6 @@ class ADMM():
         self._setVARS() 
 
         
-   # @torch.no_grad()    
     def _setVARS(self):
         """
            Initialize primal, dual and auxiliary variables and compute Jacobian. 
@@ -56,17 +55,17 @@ class ADMM():
             self.Jac = Jac
             self.squaredJac = sqJac
 
-        #Initialize Y
-        self.primalY = self.output
-        #set dimensions
-        self.dim_d = self.Theta_k.size()[-1]
-        self.dim_N = self.output.size()[1]
+            #Initialize Y
+            self.primalY = self.output
+            #set dimensions
+            self.dim_d = self.Theta_k.size()[-1]
+            self.dim_N = self.output.size()[1]
       
-        self.primalTheta = self.Theta_k
-        #Initialize dual vars U
-        self.dual = torch.zeros( self.primalY.size() )
-        if self.use_cuda:
-            self.dual = self.dual.cuda()
+            self.primalTheta = self.Theta_k
+            #Initialize dual vars U
+            self.dual = torch.zeros( self.primalY.size() )
+            if self.use_cuda:
+                self.dual = self.dual.cuda()
       
         
         
@@ -129,7 +128,6 @@ class ADMM():
 
 
 
-
     @torch.no_grad()
     def getObjective(self):
         """
@@ -152,19 +150,6 @@ class ADMM():
         vecJacobMult_j = torch.matmul(vec, self.Jac.T)
         return torch.norm(vecJacobMult_j + self.output, p=self.p)
   
-    def evalModelDiscrepancy(self, Theta):
-        """
-            Compute the difference between the model loss and the loss evaluated at a given Theta.
-        """
-        modelLoss = self.evalModelLoss(Theta)
-        self.model.setParameters( Theta )
-        self.evalModel()
-        return abs(modelLoss - torch.norm(self.output, p=self.p) )
-         
- 
-       
-    
-        
     
         
         

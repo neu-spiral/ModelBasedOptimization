@@ -125,6 +125,19 @@ class LossFunction(nn.Module):
         """Given an input X execute a forward pass."""
         pass
 
+class Linear(LossFunction):
+    "A class for shallow Linear models; the input size is m anbd the output size is m_prime."
+    def __init__(self, m , m_prime, device=torch.device("cpu")):
+        super(Linear, self).__init__(device)
+        self.m = m
+        self.m_prime = m_prime
+        self.fc1 = nn.Linear(m, m_prime)
+
+    def forward(self, X):
+        "Given an input X execute a forward pass."
+        Y =  self.fc1(X) 
+        return Y 
+
 class AEC(LossFunction):
     "A class for Autoencoders; the input size is m anbd the encoded size is m_prime."
     def __init__(self, m , m_prime, device=torch.device("cpu")):
@@ -150,25 +163,22 @@ class AEC(LossFunction):
         
 
 if __name__ == "__main__":
-    AE = AEC(4, 2)
-    sample_input = torch.randn(1, 4)
-    theta = []
-  #  theta.append( torch.ones(2, 4) )
-  #  theta.append (torch.randn(2) )
-  #  theta.append ( torch.randn(4, 2))
-  #  theta.append ( torch.randn(4))
-  #  AE.set(theta)
+    L = Linear(10,4)
+    theta_bar = L.getParameters() 
+    theta = torch.randn( theta_bar.size()  )
+    X = torch.randn(1, 10)
 
-    model_parameters = AE.getParameters()
-    print (model_parameters )
+    Y_bar = L(X)
+    Jac_bar = L.getJacobian( Y_bar  )
 
-    AE.setParameters( model_parameters )
-    model_parameters = AE.getParameters()
-    print (model_parameters )   #, dict(AE.named_parameters()) )
-   # Jac, sqJac = AE.getJacobian(sample_output, True)
-    
+    L.setParameters(theta  ) 
+    Y = L(X)
+    Jac = L.getJacobian( Y )
+    #approx = Y_bar + torch.matmul(Jac_bar, (theta - theta_bar).squeeze(0) )
+    print  ( (theta-theta_bar).size())
+    approx = Y_bar + torch.matmul((theta - theta_bar), Jac_bar.T )
+    print (approx, Y)
 
-    
     
     
     

@@ -4,7 +4,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from LossFunctions import AEC
+from LossFunctions import AEC, Linear
 from torch.utils.data import Dataset, DataLoader
 from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -20,7 +20,7 @@ class ModelBasedOptimzier:
        via the model based method proposed by Ochs et al. in 2018. 
     """
 
-    def __init__(self, dataset, rho=5.0, p=2, rank=None, model_spec=None, regularizerCoeff=0.0):
+    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0):
         #If rank is None the execution is serial. 
         self.rank = rank
 
@@ -39,7 +39,7 @@ class ModelBasedOptimzier:
       
 
         #Create the model (for loss function)
-        self.model =  AEC(model_spec['parameter_dim'][0], model_spec['parameter_dim'][1]) 
+        self.model = model
         self.model.to(device)
         #Synch model parameters across processes
         self._synchParameters()
@@ -81,7 +81,6 @@ class ModelBasedOptimzier:
         for ADMMsolver in self.ADMMsolvers:
             ADMMsolver._setVARS()
   
-        print(ADMMsolver.Theta_k)
         for k in range(iterations):
             t_start = time.time()
             PRES_TOT = 0.0
@@ -163,6 +162,18 @@ class ModelBasedOptimzier:
             torch.distributed.all_reduce(OBJ_tot) 
         return OBJ_tot 
 
+    def getModelDiscrepancy(self, theta):
+        """
+         Evaluate the discrepancy between the model function and the original function at the given point theta.
+                | \sum_i   || F_i(theta) ||_p  -  || F_i(theta_k) +  ∇F_i(theta_k)(theta - theta_k) ||_p |
+        """
+
+        obj = self.getObjective(theta)
+        modelObj = 0.0 
+        for ADMMsolver in self.ADMMsolvers:
+            modelObj += ADMMsolver.evalModelLoss( theta )
+        return  abs(obj - modelObj)
+
 
     def updateVariable(self, DELTA):
 
@@ -177,7 +188,6 @@ class ModelBasedOptimzier:
         stp_size = eta * delta 
         while True:
             obj_new = self.getObjective( (1.0 - stp_size) * theta_k + stp_size *  s_k )
-            print(obj_new, obj_k)
             if obj_new <= obj_k + gamma * DELTA:
                 break 
             stp_size *= delta
@@ -198,7 +208,7 @@ class ModelBasedOptimzier:
             #run ADMM algortihm
             model_improvement = self.runADMM( innerIterations )
             
-        #    self.updateVariable( model_improvement ) 
+            self.updateVariable( model_improvement ) 
             
      
                   
@@ -248,7 +258,17 @@ if __name__=="__main__":
 
 
     dataset =  torch.load(args.input_file)
+    model = Linear(args.m, args.m_prime)
    # run_proc(args.local_rank, args, dataset, model)
-    MBO = ModelBasedOptimzier(dataset=dataset, rank=args.local_rank, rho=args.rho, model_spec={'loss':AEC, 'parameter_dim':(args.m, args.m_prime)})
-   
-    MBO.run(innerIterations=args.iterations) 
+    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho)
+    dim_theta = MBO.model.getParameters().size()  
+
+    theta = MBO.model.getParameters()
+    for alpha in range(100):
+        diff = MBO.getModelDiscrepancy( theta + alpha * torch.randn(dim_theta) / 100. )
+        print (diff)
+#    MBO.run(innerIterations=args.iterations) 
+
+
+
+
