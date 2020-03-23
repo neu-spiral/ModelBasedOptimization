@@ -51,6 +51,8 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
 
     if p == 2:
         return EuclidianProxOp(V, rho)
+    elif p == -2:
+        return norm2squaredProxOp(V, rho)
     signs = torch.sign(V)
     V_normalized = rho * torch.abs(V)
     vec_size = V_normalized.size()[0]
@@ -83,6 +85,12 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
     U = U.unsqueeze(0)
     return U * signs / rho
 
+def norm2squaredProxOp(V, rho):
+    """
+        Return the 2-norm prox operator for the vector V
+             argmin_X ||X||_2^2 + rho/2 \|X - V\|_2^2
+    """
+    return rho / (rho + 2) * V
 
 def EuclidianProxOp(V, rho):
      """

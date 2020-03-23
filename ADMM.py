@@ -134,8 +134,10 @@ class ADMM():
         """
            Compute the objective for ADMM iterations. 
         """
-   
-        return torch.norm( self.primalY, p=self.p )
+        if self.p == -2:
+            return  torch.norm( self.primalY, p=2) ** 2
+
+        return torch.norm( self.primalY, p=self.p ) 
 
     def evalModelLoss(self, Theta=None):
         """
@@ -147,7 +149,9 @@ class ADMM():
         vec = Theta - self.Theta_k
         #vecJacobMult_j = self.model.vecMult(vec, Jacobian=self.Jac)
         vecJacobMult_j = torch.matmul(vec, self.Jac.T)
-        return torch.norm(vecJacobMult_j + self.output, p=self.p)
+        if self.p == -2:
+            return torch.norm(vecJacobMult_j + self.output, p=2) ** 2
+        return torch.norm(vecJacobMult_j + self.output, p=self.p) 
   
     
         

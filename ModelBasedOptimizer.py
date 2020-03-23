@@ -89,7 +89,6 @@ class ModelBasedOptimzier:
             PRES_TOT = 0.0
             DRES_TOT = 0.0
             OBJ_TOT = 0.0
-            model_loss = 0.0
             first_ord_TOT = 0.0
             second_ord_TOT = 0.0
 
@@ -103,7 +102,6 @@ class ModelBasedOptimzier:
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
 
-                model_loss += ADMMsolver.evalModelLoss()
                 first_ord_TOT  += first_ord
                 
                 second_ord_TOT += second_ord
@@ -148,7 +146,7 @@ class ModelBasedOptimzier:
                         
         return delta_TOT
 
-    def runSGD(self, epochs=1):
+    def runSGD(self, epochs=1, batch_size=8):
         """
            Minimize the model function plus the squared loss:
 
@@ -171,25 +169,45 @@ class ModelBasedOptimzier:
             #Proximity loss ||theta - theta_k||_2^2
             sq_loss = 0.5 * squaredLoss(theta, theta_k)
             #Keep track of loss throught the iterations 
-            running_loss = 0.0
+            running_loss = sq_loss.item()
             for ind, solver_i in enumerate(self.ADMMsolvers):
+                #loss due to the i-th datapoint
+                loss_i = solver_i.evalModelLoss( theta)
 
 
-                #zero the parameter gradients
-                optimizer.zero_grad() 
-
-                #loss
-                loss = solver_i.evalModelLoss( theta)
                 if ind == 0:
-                    loss = loss + sq_loss
-                #backprop
-                loss.backward(retain_graph=False)
+                    loss = loss_i + sq_loss
 
-                #SGD step 
-                optimizer.step()
-                running_loss += loss.item()
+                elif ind == len(self.ADMMsolvers) - 1:
+                    #Increment the loss
+                    loss = loss + loss_i
+                    #zero the parameter gradients
+                    optimizer.zero_grad()
+
+                    #backprop 
+                    loss.backward(retain_graph=False)
+                    #SGD step 
+                    optimizer.step()
+                    
+                elif ind > 0 and ind % batch_size == 0:
+                    #zero the parameter gradients
+                    optimizer.zero_grad()
+
+                    #backprop 
+                    loss.backward(retain_graph=False)
+                    #SGD step 
+                    optimizer.step()
+                    #Compute the loss 
+                    loss = loss_i
+                else:
+                    #Increment the loss
+                    loss = loss + loss_i              
+
+                running_loss += loss_i.item()
+                   
 
             logging.info("Epoch {}, loss is {}".format(i, running_loss) )
+        return theta.data
                 
 
     @torch.no_grad()
@@ -281,7 +299,8 @@ if __name__=="__main__":
     parser.add_argument("--m_prime", type=int,  default=5)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--iterations", type=int,  default=10)
-    parser.add_argument("--rho", type=float, default=1.0)
+    parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
+    parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     args = parser.parse_args()
 
 
@@ -307,23 +326,28 @@ if __name__=="__main__":
     
     #initialize model
    # model = AEC(args.m, args.m_prime, device)
-   # model = model.to(device)
-
-
-    dataset =  torch.load(args.input_file)
     model = Linear(args.m, args.m_prime)
-   # run_proc(args.local_rank, args, dataset, model)
-    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho)
-   # dim_theta = MBO.model.getParameters().size()  
+    model = model.to(device)
+
+    #data 
+    dataset =  torch.load(args.input_file)
+   # dataset = torch.randn(100, 10)
+  
+    #initialize a model based solver
+    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p)
+    #dim_theta = MBO.model.getParameters().size()  
 
    
-    MBO.runSGD(10)
+    theta =  MBO.runSGD(args.iterations)
   #  theta = MBO.model.getParameters()
   #  for alpha in range(100):
   #      diff = MBO.getModelDiscrepancy( theta + alpha * torch.randn(dim_theta) / 100. )
   #      print (diff)
-    MBO.runADMM()
- #   MBO.run(innerIterations=args.iterations) 
+    MBO.runADMM(args.iterations )
+    theta2 = MBO.ADMMsolvers[0].primalTheta  
+    print( theta2 - theta)
+    #MBO.run(innerIterations=args.iterations) 
+    
 
 
 
