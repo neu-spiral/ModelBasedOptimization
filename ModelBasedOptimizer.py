@@ -10,6 +10,8 @@ from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
 from helpers import clearFile
 import logging
+import torch.optim as optim
+
 
 #torch.manual_seed(1993)
 
@@ -24,6 +26,7 @@ class ModelBasedOptimzier:
         #If rank is None the execution is serial. 
         self.rank = rank
 
+        self.dataset = dataset 
         #load dataset
         if rank != None:
            data_sampler  = torch.utils.data.distributed.DistributedSampler(dataset, rank=rank)
@@ -59,7 +62,7 @@ class ModelBasedOptimzier:
 
          #******************************************
 
-
+    @torch.no_grad()
     def _synchParameters(self):
         """
             Synchronize model parameters across processes. 
@@ -86,6 +89,7 @@ class ModelBasedOptimzier:
             PRES_TOT = 0.0
             DRES_TOT = 0.0
             OBJ_TOT = 0.0
+            model_loss = 0.0
             first_ord_TOT = 0.0
             second_ord_TOT = 0.0
 
@@ -99,7 +103,9 @@ class ModelBasedOptimzier:
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
 
+                model_loss += ADMMsolver.evalModelLoss()
                 first_ord_TOT  += first_ord
+                
                 second_ord_TOT += second_ord
 
             now = time.time()
@@ -126,6 +132,7 @@ class ModelBasedOptimzier:
             DRES_TOT += DRES_theta
             #Add the quadratic term to OBJ
             OBJ_TOT += 0.5 * torch.norm(self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k) ** 2
+           
 
             logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, time.time() - t_start, OBJ_TOT ))
             logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
@@ -140,7 +147,52 @@ class ModelBasedOptimzier:
         delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2)**2
                         
         return delta_TOT
+
+    def runSGD(self, epochs=1):
+        """
+           Minimize the model function plus the squared loss:
+
+               min_theta  ∑_i || F_i(theta_k) +  ∇F_i(theta_k)(theta - theta_k) ||_p + ||theta - theta_k||_2^2,
+           via SGD.
+        """
+
+        #Set the optimization variable 
+        theta = self.model.getParameters()
+        theta.requires_grad = True
+        theta_k = self.model.getParameters()
+        theta_k.requires_grad = False
+
+        squaredLoss = nn.MSELoss(reduction='sum') 
+        #Define optimizer
+        optimizer = optim.SGD([theta], lr=0.001)
+
         
+        for i in range(epochs):
+            #Proximity loss ||theta - theta_k||_2^2
+            sq_loss = 0.5 * squaredLoss(theta, theta_k)
+            #Keep track of loss throught the iterations 
+            running_loss = 0.0
+            for ind, solver_i in enumerate(self.ADMMsolvers):
+
+
+                #zero the parameter gradients
+                optimizer.zero_grad() 
+
+                #loss
+                loss = solver_i.evalModelLoss( theta)
+                if ind == 0:
+                    loss = loss + sq_loss
+                #backprop
+                loss.backward(retain_graph=False)
+
+                #SGD step 
+                optimizer.step()
+                running_loss += loss.item()
+
+            logging.info("Epoch {}, loss is {}".format(i, running_loss) )
+                
+
+    @torch.no_grad()
     def getObjective(self, theta=None):
         """
          Compute the objective:  
@@ -157,11 +209,11 @@ class ModelBasedOptimzier:
             output = self.model(ADMMsolver.data)
             OBJ_tot += torch.norm(output, p=self.p) 
 
-
         if self.rank != None:
             torch.distributed.all_reduce(OBJ_tot) 
         return OBJ_tot 
 
+    @torch.no_grad()
     def getModelDiscrepancy(self, theta):
         """
          Evaluate the discrepancy between the model function and the original function at the given point theta.
@@ -175,6 +227,7 @@ class ModelBasedOptimzier:
         return  abs(obj - modelObj)
 
 
+    @torch.no_grad()
     def updateVariable(self, DELTA):
 
         last = time.time()
@@ -261,13 +314,16 @@ if __name__=="__main__":
     model = Linear(args.m, args.m_prime)
    # run_proc(args.local_rank, args, dataset, model)
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho)
-    dim_theta = MBO.model.getParameters().size()  
+   # dim_theta = MBO.model.getParameters().size()  
 
-    theta = MBO.model.getParameters()
-    for alpha in range(100):
-        diff = MBO.getModelDiscrepancy( theta + alpha * torch.randn(dim_theta) / 100. )
-        print (diff)
-#    MBO.run(innerIterations=args.iterations) 
+   
+    MBO.runSGD(10)
+  #  theta = MBO.model.getParameters()
+  #  for alpha in range(100):
+  #      diff = MBO.getModelDiscrepancy( theta + alpha * torch.randn(dim_theta) / 100. )
+  #      print (diff)
+    MBO.runADMM()
+ #   MBO.run(innerIterations=args.iterations) 
 
 
 

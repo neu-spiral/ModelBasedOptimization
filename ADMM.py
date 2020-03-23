@@ -51,7 +51,8 @@ class ADMM():
         #Compute Jacobian
         with torch.no_grad():
             Jac, sqJac = self.model.getJacobian(self.output, quadratic=True)
-
+            #Get tensor data from the output, the computational graph is not needed here. 
+            self.output = self.output.data
             self.Jac = Jac
             self.squaredJac = sqJac
 
@@ -136,8 +137,6 @@ class ADMM():
    
         return torch.norm( self.primalY, p=self.p )
 
-
-    @torch.no_grad()
     def evalModelLoss(self, Theta=None):
         """
          Compute the model loss function, around Theta_k.
