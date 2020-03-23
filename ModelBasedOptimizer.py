@@ -56,6 +56,9 @@ class ModelBasedOptimzier:
             self.ADMMsolvers.append( ADMMsolver )
         logging.info("Initialized {} ADMMsolvers".format( ind +1 )) 
         #p is the parameter in lp-norm
+        #NOTE: here, p = -2  means l2-norm squared
+        if p == -2:
+            logging.warning("Setting p to -2, it means that l2-norm squared is used.")
         self.p = p
         #regularizerCoeff is the squared regularizer`s coefficient
         self.regularizerCoeff = regularizerCoeff
