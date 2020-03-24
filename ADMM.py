@@ -3,7 +3,7 @@ import time
 import logging
 import numpy as np
 import logging
-from LossFunctions import AEC
+from Net import AEC
 from torch.utils.data import Dataset, DataLoader
 import torch
 from helpers import pNormProxOp, clearFile
@@ -90,7 +90,7 @@ class ADMM():
         if self.use_cuda:
             self.primalY = self.primalY.cuda()
 
-        return  torch.norm(oldPrimalY - self.primalY), torch.norm(PRES)
+        return  torch.norm(oldPrimalY - self.primalY, p=2), torch.norm(PRES, p=2)
 
 
     @torch.no_grad()   
@@ -125,7 +125,7 @@ class ADMM():
         #Solve the convex problem  
         self.primalTheta = self.convexSolver.solve(A=A, b=b)
        # print ( torch.matmul(A, self.primalTheta.T) - b.T )
-        return torch.norm(oldPrimalTheta - self.primalTheta)
+        return torch.norm(oldPrimalTheta - self.primalTheta, p=2)
 
 
 

@@ -15,7 +15,12 @@ import datetime
 
 colors =['b', 'g', 'r', 'c' ,'m' ,'y' ,'k' ,'w']
 hatches = ['////', '/', '\\', '\\\\', '-', '--', '+', '']
-lin_styles = ['b^-','g*--','rD--','cX-','m*--','y-']
+lin_styles = ['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-']
+
+Algorithms = {'admm':'ADMM', 'sgd':'SGD'}
+batch_sizes = [100, 32, 16, 8,  4, 2, 1]
+
+
 
 
 
@@ -24,7 +29,10 @@ def whichAlg( filename):
     if re.search('admm',  filename ):
         return 'admm'
     elif re.search('sgd',  filename ):
-        return 'sgd'
+        for bsize in batch_sizes:
+            if  re.search('sgd' + str(bsize),  filename ):
+
+               return 'sgd (bsize {})'.format(bsize)
 
 def barPlotter(DICS, outfile, y_axis_label = 'Objective', normalize=False):
     def formVals(DICS_alg):
@@ -90,6 +98,7 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
     i=0
     for alg in DICS:
         x_axis, vals = formVals( DICS[alg]  )
+        print (vals[0:10])
         plt.plot(x_axis, vals, lin_styles[i], label=alg, linewidth=3, markersize=18)
         i += 1
     plt.xlabel(xaxis_label,fontsize = 18)
@@ -97,7 +106,7 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
     plt.xticks(fontsize = 18)
     plt.yticks(fontsize = 16)
 
-    lgd = plt.legend( loc='upper left',bbox_to_anchor=(0,1),ncol=1,borderaxespad=0.,fontsize= 16)
+    lgd = plt.legend( loc='upper right',bbox_to_anchor=(1,1),ncol=1,borderaxespad=0.,fontsize= 16)
 
   #  plt.xlim(0.5,1.1)
     plt.xscale(x_scale)
@@ -196,13 +205,12 @@ if __name__=="__main__":
 
         #find out file corresponds to which alg.
         Alg  = whichAlg(filename)
-       
         with open(filename, 'rb') as current_file:
             trace  = pickle.load(current_file)
 
         if Alg not in DICS:
             if args.xaxis == 'iterations':
-                DICS[Alg] = dict( [(key, trace[key][args.yaxis]) for key in trace] )
+                DICS[Alg] = dict( [(key + 1, trace[key][args.yaxis]) for key in trace] )
                 x_axis_label = 'iterations'
             elif args.xaxis ==  'time':
                 DICS[Alg] = dict( [(trace[key]['time'], trace[key][args.yaxis]) for key in trace] )
@@ -214,4 +222,6 @@ if __name__=="__main__":
             y_axis_label = 'Objective'
         else:
             y_axis_label = 'Time(s)'
-        linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='log', y_scale='linear') 
+
+    #Plot 
+    linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='log', y_scale='linear') 

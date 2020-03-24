@@ -5,7 +5,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from LossFunctions import AEC, Linear
+from Net import AEC, Linear
 from torch.utils.data import Dataset, DataLoader
 from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -55,7 +55,7 @@ class ModelBasedOptimzier:
             data = data.to(device)
             ADMMsolver = ADMM(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
             self.ADMMsolvers.append( ADMMsolver )
-        logging.info("Initialized {} ADMMsolvers".format( ind +1 )) 
+        logger.info("Initialized {} ADMMsolvers".format( ind +1 )) 
         #p is the parameter in lp-norm
         #NOTE: here, p = -2  means l2-norm squared
         if p == -2:
@@ -76,7 +76,7 @@ class ModelBasedOptimzier:
         if self.rank != None:
             torch.distributed.broadcast(parameters, 0)
             self.model.setParameters( parameters )
-            logging.info("Synchronized model parameters across processes.")
+            logger.info("Synchronized model parameters across processes.")
 
 
     def runADMM(self, iterations=50, eps=1e-08):
@@ -96,16 +96,21 @@ class ModelBasedOptimzier:
             PRES_TOT = 0.0
             DRES_TOT = 0.0
             OBJ_TOT = 0.0
+            squaredLoss =  0.5 * torch.norm(self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k) ** 2
             first_ord_TOT = 0.0
             second_ord_TOT = 0.0
 
             #Update Y and adapt duals for each solver 
             last = time.time()
             for ADMMsolver in self.ADMMsolvers:
+                #Eval objective for each term (solver)
+                OBJ_TOT += ADMMsolver.evalModelLoss()
+                #Eval residuals for each term (solver)
                 DRES, PRES = ADMMsolver.updateYAdaptDuals()
+                #Eval first and second order terms for each term (solver)
                 first_ord, second_ord =  ADMMsolver.getCoeefficients()
 
-                OBJ_TOT += ADMMsolver.evalModelLoss()
+
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
 
@@ -114,7 +119,7 @@ class ModelBasedOptimzier:
                 second_ord_TOT += second_ord
 
             now = time.time()
-            logging.debug('Loop took {} (s)'.format(now - last) )
+            logger.debug('Loop took {} (s)'.format(now - last) )
             #Aggregate first_ord_TOT and second_ord_TOT across processes
             now = time.time()
 
@@ -126,7 +131,7 @@ class ModelBasedOptimzier:
                 torch.distributed.all_reduce(OBJ_TOT)
 
 
-                logging.debug('Reduction took {}(s)'.format(time.time() - now))
+                logger.debug('Reduction took {}(s)'.format(time.time() - now))
 
             #Compute Theta (proc 0 is responsible for this)
             ADMMsolver_i = self.ADMMsolvers[0]
@@ -135,17 +140,21 @@ class ModelBasedOptimzier:
             for ADMMsolver in self.ADMMsolvers[1:]:
                 ADMMsolver.updateTheta(first_ord_TOT, second_ord_TOT, self.ADMMsolvers[0].primalTheta)
             DRES_TOT += DRES_theta
+
+            #square root 
+            PRES_TOT = PRES_TOT.item() ** 0.5
+            DRES_TOT = DRES_TOT.item() ** 0.5 
             #Add the quadratic term to OBJ
-            OBJ_TOT += 0.5 * torch.norm(self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k) ** 2
-           
+            OBJ_TOT += squaredLoss 
+ 
             t_now = time.time()
             trace[k] = {}
             trace[k]['OBJ'] = OBJ_TOT.item()
-            trace[k]['PRES'] = PRES_TOT.item()
-            trace[k]['DRES'] = DRES_TOT.item()
+            trace[k]['PRES'] = PRES_TOT
+            trace[k]['DRES'] = DRES_TOT
             trace[k]['time'] = t_now - t_start
-            logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, time.time() - t_start, OBJ_TOT ))
-            logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
+            logger.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, time.time() - t_start, OBJ_TOT ))
+            logger.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
 
             #terminate if desired convergence achieved
             if PRES_TOT <= eps and DRES_TOT <= eps:
@@ -183,7 +192,16 @@ class ModelBasedOptimzier:
         t_start = time.time() 
         #Keep track of progress in trace
         trace = {}
-        for i in range(epochs):
+        trace[0] = {}
+        init_loss = 0.0
+        for ind, solver_i in enumerate(self.ADMMsolvers):
+            #loss due to the i-th datapoint
+            init_loss += solver_i.evalModelLoss( theta ).item()
+
+        trace[0]['OBJ'] = init_loss
+        trace[0]['time'] = time.time() - t_start
+
+        for i in range(1, epochs+1):
             #Proximity loss ||theta - theta_k||_2^2
             sq_loss = 0.5 * squaredLoss(theta, theta_k)
             #Keep track of loss throught the iterations 
@@ -227,7 +245,7 @@ class ModelBasedOptimzier:
             trace[i] = {}
             trace[i]['OBJ'] = running_loss
             trace[i]['time'] = t_now - t_start
-            logging.info("Epoch {}, loss is {}".format(i, running_loss) )
+            logger.info("Epoch {}, loss is {}".format(i, running_loss) )
         return theta.data, trace
                 
 
@@ -284,7 +302,7 @@ class ModelBasedOptimzier:
                 break 
             stp_size *= delta
         now = time.time()
-        logging.info('New step-size found and parameter updated in {}(s).'.format(now - last) )
+        logger.info('New step-size found and parameter updated in {}(s).'.format(now - last) )
         return obj_new             
         
          
@@ -295,7 +313,7 @@ class ModelBasedOptimzier:
         for k in range(iterations):
             OBJ = self.getObjective()
      
-            logging.info('Outer iteration {}, OBJ is {}'.format(k, OBJ) )
+            logger.info('Outer iteration {}, OBJ is {}'.format(k, OBJ) )
 
             #run ADMM algortihm
             model_improvement = self.runADMM( innerIterations )
@@ -319,10 +337,12 @@ if __name__=="__main__":
     parser.add_argument("--m", type=int, default=10)
     parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--iterations", type=int,  default=10)
     parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
+    parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
     args = parser.parse_args()
 
 
@@ -335,9 +355,16 @@ if __name__=="__main__":
         torch.manual_seed(1993)
 
     #Setup logger
-    FORMAT = '%(asctime)-15s %(clientip)s %(user)-8s %(message)s'
-    clearFile( args.logfile + str(args.local_rank)  )
-    logging.basicConfig(filename=args.logfile + str(args.local_rank), level=logging.INFO)
+    logger = logging.getLogger()
+    logger.setLevel(eval("logging."+args.logLevel))
+    logFile = args.logfile + str(args.local_rank)
+    clearFile(logFile)
+    fh = logging.FileHandler(logFile)
+    fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(fh)
+
+    logger.info("Starting with arguments: "+str(args))
+     
 
 
 
@@ -358,10 +385,11 @@ if __name__=="__main__":
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p)
 
    
-    theta, trace_SGD =  MBO.runSGD(args.iterations)
+    theta, trace_SGD =  MBO.runSGD(args.iterations, args.batch_size)
     delta, trace_ADMM = MBO.runADMM(args.iterations )
     
-    with open(args.tracefile + "_sgd",'wb') as f:
+
+    with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:
         pickle.dump(trace_SGD,  f)
 
     with open(args.tracefile + "_admm",'wb') as f:
