@@ -1,5 +1,6 @@
 import argparse
 import time
+import pickle
 from torch import distributed, nn
 import os
 import  torch.utils
@@ -78,15 +79,18 @@ class ModelBasedOptimzier:
             logging.info("Synchronized model parameters across processes.")
 
 
-    def runADMM(self, iterations=50):
+    def runADMM(self, iterations=50, eps=1e-08):
         """
           Execute the ADMM algrotihm for the current model function.
         """
-
+       
         #Initialize solver variables
         for ADMMsolver in self.ADMMsolvers:
             ADMMsolver._setVARS()
-  
+        
+        t_start = time.time()
+        #trace to keep trak of progress
+        trace = {}
         for k in range(iterations):
             t_start = time.time()
             PRES_TOT = 0.0
@@ -101,7 +105,7 @@ class ModelBasedOptimzier:
                 DRES, PRES = ADMMsolver.updateYAdaptDuals()
                 first_ord, second_ord =  ADMMsolver.getCoeefficients()
 
-                OBJ_TOT += ADMMsolver.getObjective()
+                OBJ_TOT += ADMMsolver.evalModelLoss()
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
 
@@ -134,9 +138,18 @@ class ModelBasedOptimzier:
             #Add the quadratic term to OBJ
             OBJ_TOT += 0.5 * torch.norm(self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k) ** 2
            
-
+            t_now = time.time()
+            trace[k] = {}
+            trace[k]['OBJ'] = OBJ_TOT.item()
+            trace[k]['PRES'] = PRES_TOT.item()
+            trace[k]['DRES'] = DRES_TOT.item()
+            trace[k]['time'] = t_now - t_start
             logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, time.time() - t_start, OBJ_TOT ))
             logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
+
+            #terminate if desired convergence achieved
+            if PRES_TOT <= eps and DRES_TOT <= eps:
+                break
 
 
        #Evaluate delta
@@ -147,7 +160,7 @@ class ModelBasedOptimzier:
             torch.distributed.all_reduce(delta_TOT)
         delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2)**2
                         
-        return delta_TOT
+        return delta_TOT, trace
 
     def runSGD(self, epochs=1, batch_size=8):
         """
@@ -167,7 +180,9 @@ class ModelBasedOptimzier:
         #Define optimizer
         optimizer = optim.SGD([theta], lr=0.001)
 
-        
+        t_start = time.time() 
+        #Keep track of progress in trace
+        trace = {}
         for i in range(epochs):
             #Proximity loss ||theta - theta_k||_2^2
             sq_loss = 0.5 * squaredLoss(theta, theta_k)
@@ -208,9 +223,12 @@ class ModelBasedOptimzier:
 
                 running_loss += loss_i.item()
                    
-
+            t_now = time.time()
+            trace[i] = {}
+            trace[i]['OBJ'] = running_loss
+            trace[i]['time'] = t_now - t_start
             logging.info("Epoch {}, loss is {}".format(i, running_loss) )
-        return theta.data
+        return theta.data, trace
                 
 
     @torch.no_grad()
@@ -299,11 +317,12 @@ if __name__=="__main__":
     parser.add_argument("--local_rank", type=int)
     parser.add_argument("--input_file", type=str)
     parser.add_argument("--m", type=int, default=10)
-    parser.add_argument("--m_prime", type=int,  default=5)
+    parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--iterations", type=int,  default=10)
     parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
+    parser.add_argument("--tracefile", type=str, help="File to store traces.")
     args = parser.parse_args()
 
 
@@ -328,29 +347,25 @@ if __name__=="__main__":
         device = torch.device("cpu")
     
     #initialize model
-   # model = AEC(args.m, args.m_prime, device)
-    model = Linear(args.m, args.m_prime)
+    model = AEC(args.m, args.m_prime, device)
+    #model = Linear(args.m, args.m_prime)
     model = model.to(device)
 
     #data 
     dataset =  torch.load(args.input_file)
-   # dataset = torch.randn(100, 10)
   
     #initialize a model based solver
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p)
-    #dim_theta = MBO.model.getParameters().size()  
 
    
-    theta =  MBO.runSGD(args.iterations)
-  #  theta = MBO.model.getParameters()
-  #  for alpha in range(100):
-  #      diff = MBO.getModelDiscrepancy( theta + alpha * torch.randn(dim_theta) / 100. )
-  #      print (diff)
-    MBO.runADMM(args.iterations )
-    theta2 = MBO.ADMMsolvers[0].primalTheta  
-    print( theta2 - theta)
-    #MBO.run(innerIterations=args.iterations) 
+    theta, trace_SGD =  MBO.runSGD(args.iterations)
+    delta, trace_ADMM = MBO.runADMM(args.iterations )
     
+    with open(args.tracefile + "_sgd",'wb') as f:
+        pickle.dump(trace_SGD,  f)
+
+    with open(args.tracefile + "_admm",'wb') as f:
+        pickle.dump(trace_ADMM,  f)
 
 
 
