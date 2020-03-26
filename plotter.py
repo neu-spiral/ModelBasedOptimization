@@ -33,6 +33,7 @@ def whichAlg( filename):
             if  re.search('sgd' + str(bsize),  filename ):
 
                return 'sgd (bsize {})'.format(bsize)
+    return 'MBO'
 
 def barPlotter(DICS, outfile, y_axis_label = 'Objective', normalize=False):
     def formVals(DICS_alg):

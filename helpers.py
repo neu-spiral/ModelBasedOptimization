@@ -1,10 +1,12 @@
 import torch
+import pickle
 import time
 import argparse 
 import numpy as np
 import sympy as sym
 import math
 from numpy import linalg as LA
+import logging
 
 
 torch.manual_seed(1993)
@@ -51,6 +53,9 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
 
     if p == 2:
         return EuclidianProxOp(V, rho)
+
+    elif p == 1:
+        return ell1normProxOp(V, rho)
     elif p == -2:
         return norm2squaredProxOp(V, rho)
     signs = torch.sign(V)
@@ -69,17 +74,17 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
         mid_bound = 0.5 * (upper_bound + lower_bound )
         U =  [V_normalized[j] * g_func(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)), p ) for j in range(vec_size)]  
         U = torch.tensor(U, dtype=torch.float)
-        print ("Buit U vector in {}".format(time.time() - t_start))
+        logging.debug("Buit U vector in {}".format(time.time() - t_start))
        # U = np.array(U, dtype=np.float64) 
-        print ("Converted  U vector in {}".format(time.time() - t_start))
+        logging.debug("Converted  U vector in {}".format(time.time() - t_start))
         U_norm = torch.norm(U, p=p)
       #  U_norm  = LA.norm(U, ord=p)
-        print ("Computed norm of U vector in {}".format(time.time() - t_start))
+        logging.debug("Computed norm of U vector in {}".format(time.time() - t_start))
         if U_norm < mid_bound:
             upper_bound = mid_bound
         else:
             lower_bound = mid_bound
-        print ("Iteration {}, in {}(s)".format(k, time.time() - t_start) )
+        logging.debug("Iteration {}, in {}(s)".format(k, time.time() - t_start) )
 
   #  U = torch.tensor(U, dtype=torch.float)
     U = U.unsqueeze(0)
@@ -102,6 +107,13 @@ def EuclidianProxOp(V, rho):
      if V_norm < rho:
          return torch.zeros( vec_size )
      return (1 - rho / V_norm ) * V
+
+def ell1normProxOp(V, rho):
+    """
+        Return the 2-norm prox operator for the vector V
+             argmin_X ||X||_1 + rho/2 \|X - V\|_2^2
+    """
+    return torch.max(V - 1./rho, V * 0.0) -  torch.max(-1. * V - 1./rho, V * 0.0)
      
       
 def _testOpt(U, V, rho, p):
@@ -114,6 +126,21 @@ def clearFile(file):
     "Delete all contents of a file"
     with open(file,'w') as f:
         f.write("")
+
+def dumpFile(fname, obj):
+    """
+       Dump picklable object obj to the file fname."
+    """
+    with open(fname,'wb') as f:
+        pickle.dump(obj,  f)
+
+def loadFile(fname):
+    """
+       Load the object dumped in fname.
+    """
+    with open(filename, 'rb') as current_file:
+        obj  = pickle.load(current_file)
+    return obj
      
     
 if __name__=="__main__":

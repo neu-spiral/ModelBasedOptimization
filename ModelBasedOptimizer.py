@@ -9,7 +9,7 @@ from Net import AEC, Linear
 from torch.utils.data import Dataset, DataLoader
 from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
-from helpers import clearFile
+from helpers import clearFile, dumpFile
 import logging
 import torch.optim as optim
 
@@ -60,6 +60,7 @@ class ModelBasedOptimzier:
         #NOTE: here, p = -2  means l2-norm squared
         if p == -2:
             logging.warning("Setting p to -2, it means that l2-norm squared is used.")
+            logging.warning("l2-norm squared is not implemented for the model based solver, it is only for debugging the ADMM solver.")
         self.p = p
         #regularizerCoeff is the squared regularizer`s coefficient
         self.regularizerCoeff = regularizerCoeff
@@ -79,7 +80,7 @@ class ModelBasedOptimzier:
             logger.info("Synchronized model parameters across processes.")
 
 
-    def runADMM(self, iterations=50, eps=1e-08):
+    def runADMM(self, iterations=50, eps=1e-04):
         """
           Execute the ADMM algrotihm for the current model function.
         """
@@ -139,7 +140,7 @@ class ModelBasedOptimzier:
             #Update Theta for the rest of the solvers across processes
             for ADMMsolver in self.ADMMsolvers[1:]:
                 ADMMsolver.updateTheta(first_ord_TOT, second_ord_TOT, self.ADMMsolvers[0].primalTheta)
-            DRES_TOT += DRES_theta
+            DRES_TOT += DRES_theta ** 2
 
             #square root 
             PRES_TOT = PRES_TOT.item() ** 0.5
@@ -153,21 +154,23 @@ class ModelBasedOptimzier:
             trace[k]['PRES'] = PRES_TOT
             trace[k]['DRES'] = DRES_TOT
             trace[k]['time'] = t_now - t_start
-            logger.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, time.time() - t_start, OBJ_TOT ))
-            logger.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
+            logger.debug("Iteration {0} is done in {1:.2f} (s), OBJ is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
+            logger.debug("Iteration {0}, PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
 
             #terminate if desired convergence achieved
             if PRES_TOT <= eps and DRES_TOT <= eps:
                 break
-
-
-       #Evaluate delta
+ 
+        #log last iteration stats
+        logger.info("Iteration {0} is done in {1:.2f} (s), OBJ is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
+        logger.info("Iteration {0}, PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
+        #Evaluate delta (model improvement) 
         delta_TOT = 0.0
         for ADMMsolver in self.ADMMsolvers:
             delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=self.p) )
         if self.rank != None:
             torch.distributed.all_reduce(delta_TOT)
-        delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2)**2
+        delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
                         
         return delta_TOT, trace
 
@@ -245,7 +248,7 @@ class ModelBasedOptimzier:
             trace[i] = {}
             trace[i]['OBJ'] = running_loss
             trace[i]['time'] = t_now - t_start
-            logger.info("Epoch {}, loss is {}".format(i, running_loss) )
+            logger.info("Epoch {0}, loss is {1:.4f}".format(i, running_loss) )
         return theta.data, trace
                 
 
@@ -260,12 +263,12 @@ class ModelBasedOptimzier:
 
         OBJ_tot = 0.0
         if theta != None:
+            logger.warning("Evaluting the objective, this will modify model parameters.")
             self.model.setParameters( theta )
 
         for ADMMsolver in self.ADMMsolvers:
             output = self.model(ADMMsolver.data)
             OBJ_tot += torch.norm(output, p=self.p) 
-
         if self.rank != None:
             torch.distributed.all_reduce(OBJ_tot) 
         return OBJ_tot 
@@ -288,37 +291,55 @@ class ModelBasedOptimzier:
     def updateVariable(self, DELTA):
 
         last = time.time()
-        delta =0.5
-        gamma = 0.5
-        eta = 2.0
+        delta =0.85
+        gamma = 0.1
+        eta = 1.0
 
         obj_k = self.getObjective()
         theta_k = self.ADMMsolvers[0].Theta_k
         s_k = self.ADMMsolvers[0].primalTheta
         stp_size = eta * delta 
         while True:
-            obj_new = self.getObjective( (1.0 - stp_size) * theta_k + stp_size *  s_k )
+            new_theta = (1.0 - stp_size) * theta_k + stp_size *  s_k
+            obj_new = self.getObjective( new_theta )
+            print(obj_new, obj_k + gamma * DELTA)
             if obj_new <= obj_k + gamma * DELTA:
                 break 
             stp_size *= delta
         now = time.time()
-        logger.info('New step-size found and parameter updated in {}(s).'.format(now - last) )
+        logger.debug('New step-size found and parameter updated in {0:.2f}(s).'.format(now - last) )
         return obj_new             
         
          
     
         
 
-    def run(self,  innerIterations=50, iterations=1):
-        for k in range(iterations):
-            OBJ = self.getObjective()
-     
-            logger.info('Outer iteration {}, OBJ is {}'.format(k, OBJ) )
-
+    def run(self, iterations=20, innerIterations=50):
+        if self.p < 1:
+            raise Exception("Please enter a value for p that is greater than or eqaul to 1.")
+        trace = {}
+        t_start = time.time()
+        trace[0] = {}
+        trace[0]['OBJ'] =  self.getObjective()
+        trace[0]['time'] = time.time() - t_start 
+        trace[0]['DELTA'] = 0.0
+        logger.info('Outer iteration 0, OBJ is {0:.4f}'.format(trace[0]['OBJ'] ) )
+        for k in range(1, iterations+1):
             #run ADMM algortihm
-            model_improvement = self.runADMM( innerIterations )
+            model_improvement, admm_trace = self.runADMM( innerIterations )
             
+            #update optimization variable via Armijo rule and set model parameters
             self.updateVariable( model_improvement ) 
+
+            #log and keep track of stats
+            OBJ = self.getObjective()
+            logger.info('Outer iteration {0}, OBJ is {1:.4f}, model improvement {2:.4f}'.format(k, OBJ, model_improvement) )
+            trace[k] = {}
+            trace[k]['OBJ'] = OBJ
+            trace[k]['DELTA'] = model_improvement
+            trace[k]['time'] = time.time() - t_start
+        return trace 
+           
             
      
                   
@@ -338,7 +359,8 @@ if __name__=="__main__":
     parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--iterations", type=int,  default=10)
+    parser.add_argument("--inner_iterations", type=int,  default=40)
+    parser.add_argument("--iterations", type=int,  default=50)
     parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
@@ -374,7 +396,7 @@ if __name__=="__main__":
         device = torch.device("cpu")
     
     #initialize model
-    model = AEC(args.m, args.m_prime, device)
+    model = AEC(args.m, args.m_prime, device=device)
     #model = Linear(args.m, args.m_prime)
     model = model.to(device)
 
@@ -383,17 +405,18 @@ if __name__=="__main__":
   
     #initialize a model based solver
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p)
-
+    trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations)
+    dumpFile(args.tracefile, trace)
    
-    theta, trace_SGD =  MBO.runSGD(args.iterations, args.batch_size)
-    delta, trace_ADMM = MBO.runADMM(args.iterations )
+ #   theta, trace_SGD =  MBO.runSGD(args.inner_iterations, args.batch_size)
+ #   delta, trace_ADMM = MBO.runADMM(args.inner_iterations )
     
 
-    with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:
-        pickle.dump(trace_SGD,  f)
+ #   with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:
+ #       pickle.dump(trace_SGD,  f)
 
-    with open(args.tracefile + "_admm",'wb') as f:
-        pickle.dump(trace_ADMM,  f)
+ #   with open(args.tracefile + "_admm",'wb') as f:
+ #       pickle.dump(trace_ADMM,  f)
 
 
 

@@ -166,8 +166,12 @@ class solveQuadratic():
         """
         self.quadCoeff = quadCoeff 
     def solve(self, A, b):
-        
-        A += self.quadCoeff * torch.eye( A.size()[1]  )
+        #Qudartic term due to the norm2 squared regularizer        
+        A_regulrizer = self.quadCoeff * torch.eye( A.size()[1]  )
+        if torch.cuda.is_available():
+            A_regulrizer = A_regulrizer.cuda()
+
+        A += A_regulrizer
         b = b.T.unsqueeze(0)
         sol, LUdecomp = torch.solve(b, A)
         
