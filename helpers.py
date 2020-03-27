@@ -1,4 +1,5 @@
 import torch
+import matplotlib.pyplot as plt
 import pickle
 import time
 import argparse 
@@ -7,7 +8,7 @@ import sympy as sym
 import math
 from numpy import linalg as LA
 import logging
-
+from scipy.interpolate import interp1d
 
 torch.manual_seed(1993)
 
@@ -69,10 +70,13 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
     upper_bound = torch.norm(V_normalized, p=p)
     lower_bound = 0.0
     U =  torch.zeros( vec_size )
+
+    #estimator for g function
+    gaHat = estimate_gFunction(p)
     for k in  range( math.ceil(math.log2(1./eps)) ):
         t_start = time.time()
         mid_bound = 0.5 * (upper_bound + lower_bound )
-        U =  [V_normalized[j] * g_func(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)), p ) for j in range(vec_size)]  
+        U =  [V_normalized[j] * gaHat(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0))) for j in range(vec_size)]  
         U = torch.tensor(U, dtype=torch.float)
         logging.debug("Buit U vector in {}".format(time.time() - t_start))
        # U = np.array(U, dtype=np.float64) 
@@ -114,6 +118,22 @@ def ell1normProxOp(V, rho):
              argmin_X ||X||_1 + rho/2 \|X - V\|_2^2
     """
     return torch.max(V - 1./rho, V * 0.0) -  torch.max(-1. * V - 1./rho, V * 0.0)
+
+def estimate_gFunction(p, eps=1.e-8, kind='linear'):
+    """
+        Return an estimator for  the g function that is the solution of (x/a)^(p-1)+x=1.
+    """
+
+    g_inv = lambda x: (1. - x ) ** (1./ (1. - p)) * x
+    #Generate a set of x and a pairs
+    x = np.arange(0, 1, eps)
+    a = g_inv( x )
+    return interp1d(a, x, kind=kind)
+
+
+
+    
+    
      
       
 def _testOpt(U, V, rho, p):
@@ -151,11 +171,12 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     t_s = time.time()
+    logging.getLogger().setLevel(logging.DEBUG) 
     V = torch.randn(1,args.n)
     V =  torch.abs(V)
     U_p = pNormProxOp(V, rho=args.rho, p=args.p)
-    U = EuclidianProxOp(V, args.rho)
-    print (U.size(), U_p.size())
+    #U = EuclidianProxOp(V, args.rho)
+    #print (U.size(), U_p.size())
     t_e = time.time()
     print (   _testOpt(U_p, V, rho=args.rho, p=args.p) )
     print ("Time {} seconds".format(t_e - t_s) )
