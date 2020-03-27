@@ -24,7 +24,7 @@ batch_sizes = [100, 32, 16, 8,  4, 2, 1]
 
 
 
-def whichAlg( filename):
+def whichAlg( filename, keywords = {'admm':'admm'}):
     "Find filename corresponds to which algrotihm."
     if re.search('admm',  filename ):
         return 'admm'
@@ -34,6 +34,14 @@ def whichAlg( filename):
 
                return 'sgd (bsize {})'.format(bsize)
     return 'MBO'
+
+def whichKey( filename, keywords = {'admm':'admm'}):
+    "Find filename corresponds to whcih key in keywords."
+    for key in keywords:
+        if re.search(key, filename):
+            return keywords[key]
+    
+    
 
 def barPlotter(DICS, outfile, y_axis_label = 'Objective', normalize=False):
     def formVals(DICS_alg):
@@ -201,11 +209,12 @@ if __name__=="__main__":
     
     DICS = {}
     
+    keywords = {'_1_':'p=1', '_2_':'p=2'}
     max_dict = {}
     for filename in args.filenames:
 
         #find out file corresponds to which alg.
-        Alg  = whichAlg(filename)
+        Alg  = whichKey(filename, keywords)
         with open(filename, 'rb') as current_file:
             trace  = pickle.load(current_file)
 
