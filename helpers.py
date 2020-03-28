@@ -12,26 +12,28 @@ from scipy.interpolate import interp1d
 
 torch.manual_seed(1993)
 
-def solve_ga_bisection(a, p):
+def solve_ga_bisection(a, p, epsilon=1.e-8):
     """Return the solution of (x/a)^(p-1)+x=1, via bi-section method."""
     if a>0.:
         U = 1
         L = 0.
-        epsilon = 1.e-8
         error = epsilon + 1
         f = lambda x:(x/a)**(p-1)+x-1
         while error>epsilon:
-            C = (L+U)/2.
-            if f(C)*f(U)<0:
+            C = (L+U)/2. 
+            if f(C)*f(U) <= 0:
                 L = C
             else:
                 U = C
-            error = (U-L)/a
+            
+            error = (U-L)
+           
+            
         return C
     else:
         return 0.
 
-def pNormProxOp(V, rho, p=2, eps=1.e-6):
+def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
     """
         Return the p-norm prox operator for the vector V
                argmin_X ||X||_p + rho/2 \|X - V\|_2^2
@@ -48,6 +50,11 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
             return sol
         else:
             return  0.
+
+    t_start = time.time()
+    b_size, data_size = V.size()
+    if b_size != 1:
+        raise Exception('V must has a batch dimenstion of one.')
     V = V.squeeze(0)
 
     if p == 2:
@@ -70,31 +77,28 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
     U =  torch.zeros(vec_size, dtype=torch.float)
 
     #estimator for g function
-    gaHat = estimate_gFunction(p)
+    if g_est is None:
+        g_est = estimate_gFunction(p)
     for k in  range( math.ceil(math.log2(1./eps)) ):
-        t_start = time.time()
         mid_bound = 0.5 * (upper_bound + lower_bound )
         for j in range(vec_size):
            try:
-              U_j = V_normalized[j] * gaHat(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)) )
+              U_j = V_normalized[j] * g_est(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)) )
            except ValueError:
-              U_j = V_normalized[j] * solve_ga_bisection(mid_bound * V_normalized[j].item() ** ((2.0-p) / (p-1.0)), p)  
+              #if argument of g_est is above the given values (during estimating ga) the output is 1
+              U_j = V_normalized[j] 
            U[j] = U_j
-#        U = torch.tensor(U, dtype=torch.float)
 
-#        logging.debug("Buit U vector in {}".format(time.time() - t_start))
-       # U = np.array(U, dtype=np.float64) 
-        logging.debug("Converted  U vector in {}".format(time.time() - t_start))
+        #compute norm
         U_norm = torch.norm(U, p=p)
-      #  U_norm  = LA.norm(U, ord=p)
-        logging.debug("Computed norm of U vector in {}".format(time.time() - t_start))
+
+        #update bounds
         if U_norm < mid_bound:
             upper_bound = mid_bound
         else:
             lower_bound = mid_bound
-        logging.debug("Iteration {}, in {}(s)".format(k, time.time() - t_start) )
 
-  #  U = torch.tensor(U, dtype=torch.float)
+    logging.debug('Computed the proximal operator in {0:0.2f}(s)'.format(time.time() - t_start) )
     U = U.unsqueeze(0)
     return U * signs / rho
 
@@ -163,7 +167,7 @@ def loadFile(fname):
     """
        Load the object dumped in fname.
     """
-    with open(filename, 'rb') as current_file:
+    with open(fname, 'rb') as current_file:
         obj  = pickle.load(current_file)
     return obj
      
@@ -174,15 +178,19 @@ if __name__=="__main__":
     parser.add_argument("--p", type=float, help="p norm", default=2.)
     parser.add_argument("--rho", type=float, help="rho", default=1.0)
     args = parser.parse_args()
+ 
+    for p in [1.5, 2.5,4,5]:
+        estimate_g = estimate_gFunction(p)
+        dumpFile('interpolations/p' + str(p),  estimate_g)
+        print('Estimation and saving done for {}'.format(p))
 
-    t_s = time.time()
-    logging.getLogger().setLevel(logging.INFO) 
-    V = torch.randn(1, args.n)
-    V =  torch.abs(V)
-    U_p = pNormProxOp(V, rho=args.rho, p=args.p)
-    print(U_p.size())
+#    t_s = time.time()
+#    logging.getLogger().setLevel(logging.INFO) 
+#    V = torch.randn(1, args.n)
+#    V =  torch.abs(V)
+#    U_p = pNormProxOp(V, rho=args.rho, p=args.p)
     #U = EuclidianProxOp(V, args.rho)
-    #print (U.size(), U_p.size())
-    t_e = time.time()
-    print (   _testOpt(U_p, V, rho=args.rho, p=args.p) )
-    print ("Time {} seconds".format(t_e - t_s) )
+#    print (U_p.size())
+#    t_e = time.time()
+#    print (   _testOpt(U_p, V, rho=args.rho, p=args.p) )
+#    print ("Time {} seconds".format(t_e - t_s) )

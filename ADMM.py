@@ -71,7 +71,7 @@ class ADMM():
         
         
     @torch.no_grad()
-    def updateYAdaptDuals(self):
+    def updateYAdaptDuals(self, g_est):
         """
             Update the primal Y variable via prox. operator for the p-norm.
         """
@@ -86,7 +86,7 @@ class ADMM():
         self.dual += PRES 
         oldPrimalY =  self.primalY
         #Update Y 
-        self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho, p=self.p) 
+        self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho, p=self.p, g_est=g_est) 
         if self.use_cuda:
             self.primalY = self.primalY.cuda()
 

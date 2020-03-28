@@ -9,7 +9,7 @@ from Net import AEC, Linear
 from torch.utils.data import Dataset, DataLoader
 from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
-from helpers import clearFile, dumpFile
+from helpers import clearFile, dumpFile, estimate_gFunction
 import logging
 import torch.optim as optim
 
@@ -23,7 +23,7 @@ class ModelBasedOptimzier:
        via the model based method proposed by Ochs et al. in 2018. 
     """
 
-    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0):
+    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0, g_est=None):
         #If rank is None the execution is serial. 
         self.rank = rank
 
@@ -35,6 +35,9 @@ class ModelBasedOptimzier:
            data_sampler = None
         data_loader = DataLoader(dataset, sampler=data_sampler, batch_size=1)
 
+
+        #estimator for g function (used in runADMM)
+        self.g_est = g_est
         #Check if GPU is available 
         if torch.cuda.is_available():
             device = torch.device("cuda:{}".format(0))
@@ -107,7 +110,7 @@ class ModelBasedOptimzier:
                 #Eval objective for each term (solver)
                 OBJ_TOT += ADMMsolver.evalModelLoss()
                 #Eval residuals for each term (solver)
-                DRES, PRES = ADMMsolver.updateYAdaptDuals()
+                DRES, PRES = ADMMsolver.updateYAdaptDuals( self.g_est )
                 #Eval first and second order terms for each term (solver)
                 first_ord, second_ord =  ADMMsolver.getCoeefficients()
 
@@ -120,7 +123,7 @@ class ModelBasedOptimzier:
                 second_ord_TOT += second_ord
 
             now = time.time()
-            logger.debug('Loop took {} (s)'.format(now - last) )
+            logger.debug('Updated primal Y variables in {}(s)'.format(now - last) )
             #Aggregate first_ord_TOT and second_ord_TOT across processes
             now = time.time()
 
@@ -402,9 +405,13 @@ if __name__=="__main__":
 
     #data 
     dataset =  torch.load(args.input_file)
+    
+    #estimate g function
+    if args.p not in [1, 2]:
+        g_est = estimate_gFunction(args.p)
   
     #initialize a model based solver
-    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p)
+    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
     trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations)
     dumpFile(args.tracefile, trace)
    
