@@ -15,17 +15,17 @@ torch.manual_seed(1993)
 def solve_ga_bisection(a, p):
     """Return the solution of (x/a)^(p-1)+x=1, via bi-section method."""
     if a>0.:
-        U = a
+        U = 1
         L = 0.
         epsilon = 1.e-8
         error = epsilon + 1
         f = lambda x:(x/a)**(p-1)+x-1
         while error>epsilon:
             C = (L+U)/2.
-            if f(C)*f(U)>0:
-                U = C
-            else:
+            if f(C)*f(U)<0:
                 L = C
+            else:
+                U = C
             error = (U-L)/a
         return C
     else:
@@ -48,8 +48,6 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
             return sol
         else:
             return  0.
-
-
     V = V.squeeze(0)
 
     if p == 2:
@@ -69,16 +67,22 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6):
         return U 
     upper_bound = torch.norm(V_normalized, p=p)
     lower_bound = 0.0
-    U =  torch.zeros( vec_size )
+    U =  torch.zeros(vec_size, dtype=torch.float)
 
     #estimator for g function
     gaHat = estimate_gFunction(p)
     for k in  range( math.ceil(math.log2(1./eps)) ):
         t_start = time.time()
         mid_bound = 0.5 * (upper_bound + lower_bound )
-        U =  [V_normalized[j] * gaHat(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0))) for j in range(vec_size)]  
-        U = torch.tensor(U, dtype=torch.float)
-        logging.debug("Buit U vector in {}".format(time.time() - t_start))
+        for j in range(vec_size):
+           try:
+              U_j = V_normalized[j] * gaHat(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)) )
+           except ValueError:
+              U_j = V_normalized[j] * solve_ga_bisection(mid_bound * V_normalized[j].item() ** ((2.0-p) / (p-1.0)), p)  
+           U[j] = U_j
+#        U = torch.tensor(U, dtype=torch.float)
+
+#        logging.debug("Buit U vector in {}".format(time.time() - t_start))
        # U = np.array(U, dtype=np.float64) 
         logging.debug("Converted  U vector in {}".format(time.time() - t_start))
         U_norm = torch.norm(U, p=p)
@@ -106,18 +110,18 @@ def EuclidianProxOp(V, rho):
         Return the 2-norm prox operator for the vector V
              argmin_X ||X||_2 + rho/2 \|X - V\|_2^2
      """
-     vec_size = V.size()[0]
      V_norm = torch.norm(V, 2)
      if V_norm < rho:
-         return torch.zeros( vec_size )
-     return (1 - rho / V_norm ) * V
+         return torch.zeros( V.size() ).unsqueeze(0)
+     return (1 - rho / V_norm ) * V.unsqueeze(0)
 
 def ell1normProxOp(V, rho):
     """
         Return the 2-norm prox operator for the vector V
              argmin_X ||X||_1 + rho/2 \|X - V\|_2^2
     """
-    return torch.max(V - 1./rho, V * 0.0) -  torch.max(-1. * V - 1./rho, V * 0.0)
+    V_proj =  torch.max(V - 1./rho, V * 0.0) -  torch.max(-1. * V - 1./rho, V * 0.0)
+    return V_proj.unsqueeze(0)
 
 def estimate_gFunction(p, eps=1.e-8, kind='linear'):
     """
@@ -137,9 +141,10 @@ def estimate_gFunction(p, eps=1.e-8, kind='linear'):
      
       
 def _testOpt(U, V, rho, p):
+    V  = V.squeeze(0)
+    U = U.squeeze(0)
     vec_size = V.size()[0]
     norm_U =  torch.norm(U, p=p)
-    print( [U[i] for i in range(vec_size)])
     return [(U[i] / norm_U) ** (p-1.0) + rho * (U[i] - V[i]) for i in range(vec_size)]
         
 def clearFile(file):
@@ -165,16 +170,17 @@ def loadFile(fname):
     
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n", type=int, help="vector size")
+    parser.add_argument("--n", type=int, help="vector size", default=10)
     parser.add_argument("--p", type=float, help="p norm", default=2.)
     parser.add_argument("--rho", type=float, help="rho", default=1.0)
     args = parser.parse_args()
 
     t_s = time.time()
-    logging.getLogger().setLevel(logging.DEBUG) 
-    V = torch.randn(1,args.n)
+    logging.getLogger().setLevel(logging.INFO) 
+    V = torch.randn(1, args.n)
     V =  torch.abs(V)
     U_p = pNormProxOp(V, rho=args.rho, p=args.p)
+    print(U_p.size())
     #U = EuclidianProxOp(V, args.rho)
     #print (U.size(), U_p.size())
     t_e = time.time()

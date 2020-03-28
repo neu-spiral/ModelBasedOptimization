@@ -68,7 +68,6 @@ class ADMM():
             self.dual = torch.zeros( self.primalY.size() )
             if self.use_cuda:
                 self.dual = self.dual.cuda()
-      
         
         
     @torch.no_grad()
@@ -258,10 +257,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str)
     parser.add_argument("--m", type=int, default=10)
-    parser.add_argument("--m_prime", type=int,  default=2)
-    parser.add_argument("--iterations", type=int,  default=10)
+    parser.add_argument("--m_prime", type=int,  default=4)
+    parser.add_argument("--iterations", type=int,  default=100)
     parser.add_argument("--logfile", type=str,default="serial.log")
     parser.add_argument("--rho", type=float, default=1.0)
+    parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     args = parser.parse_args()
 
 
@@ -273,12 +273,11 @@ if __name__ == "__main__":
     dataset =  torch.load(args.input_file)
     data_loader = DataLoader(dataset, batch_size=1) 
     #Instansiate model
-   # model = AEC(args.m, args.m_prime)
-    model = Embed(args.m, args.m_prime)
+    model = AEC(args.m, args.m_prime)
     #Instansiate ADMMsolvres
     ADMMsolvers = []
     for data in data_loader:
-        ADMMsolver = ADMM(data, model, rho=args.rho)
+        ADMMsolver = ADMM(data, model=model, rho=args.rho, p=args.p)
         ADMMsolvers.append(ADMMsolver)
     logging.info("Initialized the ADMMsolvers for {} datapoints".format(len(ADMMsolvers)) )
 
