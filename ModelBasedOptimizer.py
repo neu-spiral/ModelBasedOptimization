@@ -96,7 +96,7 @@ class ModelBasedOptimzier:
         #trace to keep trak of progress
         trace = {}
         for k in range(iterations):
-            t_start = time.time()
+            t_start_k = time.time()
             PRES_TOT = 0.0
             DRES_TOT = 0.0
             OBJ_TOT = 0.0
@@ -157,11 +157,22 @@ class ModelBasedOptimzier:
             trace[k]['PRES'] = PRES_TOT
             trace[k]['DRES'] = DRES_TOT
             trace[k]['time'] = t_now - t_start
-            logger.debug("Iteration {0} is done in {1:.2f} (s), OBJ is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
+            
+            logger.debug("Iteration {0} is done in {1:.2f} (s), OBJ is {2:.4f}".format(k, time.time() - t_start_k, OBJ_TOT ))
             logger.debug("Iteration {0}, PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
 
             #terminate if desired convergence achieved
             if PRES_TOT <= eps and DRES_TOT <= eps:
+                #Evaluate delta (model improvement) 
+                delta_TOT = 0.0
+                for ADMMsolver in self.ADMMsolvers:
+                    if self.p == -2:
+                        delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=2) ** 2 )
+                    else:
+                        delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=self.p) )
+                if self.rank != None:
+                    torch.distributed.all_reduce(delta_TOT)
+                delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
                 break
  
         #log last iteration stats
@@ -374,9 +385,18 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self, iterations=20, innerIterations=50):
-       # if self.p == -2:
-       #     return self.MSE(epochs=iterations)
+    def run(self, iterations=20, innerIterations=50, l2SquaredSolver='MBO'):
+        if self.p == -2 and l2SquaredSolver != 'MBO':
+            logging.info('Solving ell2 norm squared via {}'.format(l2SquaredSolver) )
+            return self.MSE(epochs=iterations)
+
+
+        #Accuracy for inner problem 
+        eps_init = 1.e-01
+        #Factor with which increase the accuracy at each iter
+        eps_factor = 0.85
+
+        #Keep track of progress in trace
         trace = {}
         t_start = time.time()
         trace[0] = {}
@@ -385,8 +405,11 @@ class ModelBasedOptimzier:
         trace[0]['DELTA'] = 0.0
         logger.info('Outer iteration 0, OBJ is {0:.4f}'.format(trace[0]['OBJ'] ) )
         for k in range(1, iterations+1):
+            #set the inner problem required accuracy
+            eps = eps_init * eps_factor ** (k-1)
+
             #run ADMM algortihm
-            model_improvement, admm_trace = self.runADMM( innerIterations )
+            model_improvement, admm_trace = self.runADMM( innerIterations, eps=eps )
             
             #update optimization variable via Armijo rule and set model parameters
             self.updateVariable( model_improvement ) 
@@ -426,6 +449,7 @@ if __name__=="__main__":
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
     parser.add_argument("--outfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
+    parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
     args = parser.parse_args()
 
 
@@ -465,17 +489,14 @@ if __name__=="__main__":
     dataset =  torch.load(args.input_file)
     
     #estimate g function
-    if args.p not in [1, 2]:
+    if args.p not in [1, 2, -2]:
         g_est = estimate_gFunction(args.p)
     else:
         g_est = None
   
     #initialize a model based solver
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
-    trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations)
-   # if args.p == -2:
-   #     dumpFile(args.tracefile + '_SGD', trace)
-   # else:
+    trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, l2SquaredSolver=args.l2SquaredSolver)
     dumpFile(args.tracefile, trace)
 
     #save model parameters

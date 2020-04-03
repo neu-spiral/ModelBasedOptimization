@@ -37,7 +37,7 @@ def whichAlg( filename, keywords = {'admm':'admm'}):
 
 def whichKey( filename, keywords = {'admm':'admm'}):
     "Find filename corresponds to whcih key in keywords."
-    for key in keywords:
+    for key in sorted( keywords.keys() ):
         if re.search(key, filename):
             return keywords[key]
     
@@ -94,10 +94,11 @@ def barPlotter(DICS, outfile, y_axis_label = 'Objective', normalize=False):
     plt.show()    
 
 def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear'):
-    def formVals(DICS_alg):
+    def formVals(DICS_alg, sample=1):
         vals = []
         x_axis = []
         for key in sorted( DICS_alg.keys()):
+            
             vals.append( DICS_alg[key]  )
             x_axis.append(key )
         return x_axis, vals
@@ -107,7 +108,7 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
     i=0
     for alg in DICS:
         x_axis, vals = formVals( DICS[alg]  )
-        print (vals[0:10])
+        #print (vals[0:10])
         plt.plot(x_axis, vals, lin_styles[i], label=alg, linewidth=3, markersize=18)
         i += 1
     plt.xlabel(xaxis_label,fontsize = 18)
@@ -209,7 +210,7 @@ if __name__=="__main__":
     
     DICS = {}
     
-    keywords = {'_1_':'p=1', '_2_':'p=2'}
+    keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
     max_dict = {}
     for filename in args.filenames:
 
