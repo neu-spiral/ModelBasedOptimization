@@ -5,7 +5,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from Net import AEC, Linear
+from Net import AEC, DAEC, Linear
 from torch.utils.data import Dataset, DataLoader
 from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -165,17 +165,71 @@ class ModelBasedOptimzier:
                 break
  
         #log last iteration stats
-        logger.info("Iteration {0} is done in {1:.2f} (s), OBJ is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
-        logger.info("Iteration {0}, PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
+        logger.info("Inner ADMM done in {0} iterations, took  {1:.2f}(s), final objective is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
+        logger.info("PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
         #Evaluate delta (model improvement) 
         delta_TOT = 0.0
         for ADMMsolver in self.ADMMsolvers:
-            delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=self.p) )
+            if self.p == -2:
+                delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=2) ** 2 )
+            else:
+                delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=self.p) )
         if self.rank != None:
             torch.distributed.all_reduce(delta_TOT)
         delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
                         
         return delta_TOT, trace
+
+    def MSE(self, epochs=1, batch_size=8):
+        """
+            Minimize Mean Squared Error via PyTorch optimziers.
+        """
+        t_start = time.time()
+
+        #Define optimizer
+        optimizer = optim.SGD(self.model.parameters(), lr=0.001)
+
+        #DatalLoader
+        data_loader = DataLoader(self.dataset,  batch_size=batch_size)
+
+        #Keep track of progress in trace
+        trace = {}
+        trace[0] = {}
+        init_loss = 0.0
+        for ind, solver_i in enumerate(self.ADMMsolvers):
+            #loss due to the i-th datapoint
+            init_loss += torch.norm(self.model( solver_i.data), p=2) ** 2
+
+        trace[0]['OBJ'] = init_loss
+        trace[0]['time'] = time.time() - t_start
+        logger.info("Epoch {0}, loss is {1:.4f}".format(0, init_loss) )
+        for i in range(1, epochs+1):
+             
+            #Keep track of loss throught the iterations 
+            running_loss = 0.0
+            loss = 0.0
+            for ind, data in enumerate(data_loader):
+                #loss due to the i-th datapoint
+                loss = torch.norm(self.model(data), p=2) ** 2
+                 
+                #zero the parameter gradients
+                optimizer.zero_grad()
+
+                #backprop 
+                loss.backward(retain_graph=False)
+
+                #SGD step 
+                optimizer.step()
+                #update running loss
+                running_loss += loss.item()
+
+            trace[i] = {}
+            trace[i]['OBJ'] = running_loss
+            trace[i]['time'] = time.time() - t_start
+
+            logger.info("Epoch {0}, loss is {1:.4f}".format(i, running_loss) )    
+        return trace        
+
 
     def runSGD(self, epochs=1, batch_size=8):
         """
@@ -271,7 +325,10 @@ class ModelBasedOptimzier:
 
         for ADMMsolver in self.ADMMsolvers:
             output = self.model(ADMMsolver.data)
-            OBJ_tot += torch.norm(output, p=self.p) 
+            if self.p == -2:
+                OBJ_tot += torch.norm(output, p=2) ** 2
+            else:
+                OBJ_tot += torch.norm(output, p=self.p) 
         if self.rank != None:
             torch.distributed.all_reduce(OBJ_tot) 
         return OBJ_tot 
@@ -318,8 +375,8 @@ class ModelBasedOptimzier:
         
 
     def run(self, iterations=20, innerIterations=50):
-        if self.p < 1:
-            raise Exception("Please enter a value for p that is greater than or eqaul to 1.")
+       # if self.p == -2:
+       #     return self.MSE(epochs=iterations)
         trace = {}
         t_start = time.time()
         trace[0] = {}
@@ -367,6 +424,7 @@ if __name__=="__main__":
     parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
+    parser.add_argument("--outfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
     args = parser.parse_args()
 
@@ -409,11 +467,19 @@ if __name__=="__main__":
     #estimate g function
     if args.p not in [1, 2]:
         g_est = estimate_gFunction(args.p)
+    else:
+        g_est = None
   
     #initialize a model based solver
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
     trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations)
+   # if args.p == -2:
+   #     dumpFile(args.tracefile + '_SGD', trace)
+   # else:
     dumpFile(args.tracefile, trace)
+
+    #save model parameters
+    model.saveStateDict( args.outfile )
    
  #   theta, trace_SGD =  MBO.runSGD(args.inner_iterations, args.batch_size)
  #   delta, trace_ADMM = MBO.runADMM(args.inner_iterations )

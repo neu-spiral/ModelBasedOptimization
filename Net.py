@@ -168,6 +168,34 @@ class AEC(Network):
         Y = self.fc2(Y)
         return Y - X 
 
+
+class DAEC(Network):
+    """
+        A class for Denoising Autoencoders; the input size is m anbd the encoded size is m_prime.
+    """
+    def __init__(self, m , m_prime, noise='Gaussian', noise_level=1.e-3, device=torch.device("cpu")):
+        super(DAEC, self).__init__(device)
+        self.m = m
+        self.m_prime = m_prime
+        self.fc1 = nn.Linear(m, m_prime)
+        self.fc2 = nn.Linear(m_prime, m)
+        self.noise = noise
+        if noise == 'Gaussian':
+            self.noise_distr = torch.distributions.multivariate_normal.MultivariateNormal( torch.zeros(self.m), noise_level * torch.eye(self.m) )
+        elif noise == 'Bernoulli':
+            self.noise_distr = torch.distributions.bernoulli.Bernoulli( (1.0 - noise_level) * torch.ones(self.m)   )
+    def forward(self, X):
+        "Given an input X execute a forward pass."
+       
+        N = self.noise_distr.sample()
+        if noise == 'Gaussian':
+            X_corrupted = X + N
+        elif noise == 'Bernoulli':
+            X_corrupted = X * N
+        Y = torch.sigmoid( self.fc1(X_corrupted) )
+        Y = self.fc2(Y)
+        return Y - X
+
 class Embed(Network):
     """
         A class for Non-negative Matrix Factorization; the input size is m and the encoded size is m_prime.

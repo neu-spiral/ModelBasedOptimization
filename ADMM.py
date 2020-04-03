@@ -3,10 +3,10 @@ import time
 import logging
 import numpy as np
 import logging
-from Net import AEC, Embed
+from Net import AEC, DAEC, Embed
 from torch.utils.data import Dataset, DataLoader
 import torch
-from helpers import pNormProxOp, clearFile
+from helpers import pNormProxOp, clearFile, estimate_gFunction
 import torch.nn as nn
 
 #torch.manual_seed(1993)
@@ -71,7 +71,7 @@ class ADMM():
         
         
     @torch.no_grad()
-    def updateYAdaptDuals(self, g_est):
+    def updateYAdaptDuals(self, g_est=None):
         """
             Update the primal Y variable via prox. operator for the p-norm.
         """
@@ -260,20 +260,27 @@ if __name__ == "__main__":
     parser.add_argument("--m_prime", type=int,  default=4)
     parser.add_argument("--iterations", type=int,  default=100)
     parser.add_argument("--logfile", type=str,default="serial.log")
+    parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
     parser.add_argument("--rho", type=float, default=1.0)
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     args = parser.parse_args()
 
 
     clearFile( args.logfile  )
-    logging.basicConfig(filename=args.logfile, level=logging.INFO)
+    logging.basicConfig(filename=args.logfile, level=eval("logging." + args.logLevel) )
 
     #Load dataset
 
     dataset =  torch.load(args.input_file)
     data_loader = DataLoader(dataset, batch_size=1) 
     #Instansiate model
-    model = AEC(args.m, args.m_prime)
+    model = DAEC(args.m, args.m_prime)
+
+    if args.p not in [1, 2]:
+        g_est = estimate_gFunction(args.p)
+    else:
+        g_est = None
+
     #Instansiate ADMMsolvres
     ADMMsolvers = []
     for data in data_loader:
@@ -291,7 +298,7 @@ if __name__ == "__main__":
         second_ord_TOT = 0.0 
         #Update Y and adapt duals for each solver 
         for ADMMsolver in ADMMsolvers:
-            DRES, PRES = ADMMsolver.updateYAdaptDuals()
+            DRES, PRES = ADMMsolver.updateYAdaptDuals(g_est)
             first_ord, second_ord =  ADMMsolver.getCoeefficients()
 
             OBJ_TOT += ADMMsolver.getObjective()

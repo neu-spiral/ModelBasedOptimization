@@ -98,7 +98,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
         else:
             lower_bound = mid_bound
 
-    logging.debug('Computed the proximal operator in {0:0.2f}(s)'.format(time.time() - t_start) )
+    #logging.debug('Computed the proximal operator in {0:0.2f}(s)'.format(time.time() - t_start) )
     U = U.unsqueeze(0)
     return U * signs / rho
 
