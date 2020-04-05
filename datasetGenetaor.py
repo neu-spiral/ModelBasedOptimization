@@ -42,12 +42,18 @@ if __name__=="__main__":
     data = data + noise_distr.sample().view(args.n, args.m)
 
     #add outliers
+  
+    #distribution of outliers values
+    outliers_distr = torch.distributions.multivariate_normal.MultivariateNormal(10.0 * torch.ones( args.n * args.m), args.noiseLevel * torch.eye( args.n * args.m) )
+    #distribution of outliers indices
     outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones(args.n) * args.outliers)
+    
     outliers =  outliers_indices_distr.sample()
     outliers_ind = torch.nonzero( outliers>0)
     outliers = outliers.unsqueeze(1)
-    print (outliers_ind)
-    data = data + outliers * (torch.randn(args.n, args.m)  + 1.0)
+    print (outliers)
+    #add outliers 
+    data = data + outliers * outliers_distr.sample().view(args.n, args.m)
     
 
     if args.outfile == None:

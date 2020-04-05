@@ -173,7 +173,8 @@ class ModelBasedOptimzier:
                 if self.rank != None:
                     torch.distributed.all_reduce(delta_TOT)
                 delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
-                break
+                if delta_TOT < 0:
+                    break
  
         #log last iteration stats
         logger.info("Inner ADMM done in {0} iterations, took  {1:.2f}(s), final objective is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
@@ -392,9 +393,9 @@ class ModelBasedOptimzier:
 
 
         #Accuracy for inner problem 
-        eps_init = 1.e-01
+        eps_init = 1.e0
         #Factor with which increase the accuracy at each iter
-        eps_factor = 0.85
+        eps_factor = 0.9
 
         #Keep track of progress in trace
         trace = {}

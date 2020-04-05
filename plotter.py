@@ -35,58 +35,60 @@ def whichAlg( filename, keywords = {'admm':'admm'}):
                return 'sgd (bsize {})'.format(bsize)
     return 'MBO'
 
-def whichKey( filename, keywords = {'admm':'admm'}):
+def whichKey( filename, keywords = {'admm':'admm'}, keys_ordered=None):
     "Find filename corresponds to whcih key in keywords."
-    for key in sorted( keywords.keys() ):
+
+    if keys_ordered == None:
+        keys_ordered = sorted( keywords.keys() )
+    for key in keys_ordered:
         if re.search(key, filename):
             return keywords[key]
     
     
 
-def barPlotter(DICS, outfile, y_axis_label = 'Objective', normalize=False):
+def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normalize=False, lgd=True, log_bar=False):
     def formVals(DICS_alg):
-        out = [DICS_alg[key] for key in topologies]
-        labels =  topologies
+        DICS_alg_keys_ordred = sorted(DICS_alg.keys())
+        out = [DICS_alg[key] for key in DICS_alg_keys_ordred]
+        labels =  DICS_alg_keys_ordred
         return out, labels
     fig, ax = plt.subplots()
     fig.set_size_inches(20, 4)
     width = 1
 
 
-    N = len(DICS[DICS.keys()[0]].keys()) 
+    N = len(DICS[ list( DICS.keys() )[0] ].keys()) 
     numb_bars = len(DICS.keys() ) + 1
     ind = np.arange(0,numb_bars*N ,numb_bars)
     RECTS = []
     i = 0
 
 
-    if args.normalize:
+    if normalize:
         plt.ylim([0,1.1])
         y_axis_label = "Normalized " + y_axis_label
-        LOGBAR = False
-    else:
-        plt.ylim([0.1, 50])
-        LOGBAR = True
 
-    for key  in Algorithms:
+   
+    for key  in DICS:
         values, labels = formVals(DICS[key])
     #    ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=alg,log=True)
-        RECTS+= ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=key,log=LOGBAR)
+        RECTS+= ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=key,log=log_bar)
         i+=1
-    if args.lgd:
-        LGD = ax.legend(Algorithms, ncol=len(DICS.keys() ), borderaxespad=0.,loc=3, bbox_to_anchor=(0., 1.02, 1., .102),fontsize=15,mode='expand')    
+    if lgd:
+        LGD = ax.legend(ncol=len(DICS.keys() ), borderaxespad=0.,loc=3, bbox_to_anchor=(0., 1.02, 1., .102),fontsize=15,mode='expand')    
     else:
         LGD = None
     
     ax.set_xticks(ind + width) 
     ax.set_xticklabels(tuple(labels),fontsize = 18)
+    ax.set_xlabel( x_axis_label, fontsize = 18 )
     ax.set_ylabel(y_axis_label,fontsize=18)
   #  ax.set_yticklabels([0, 0.5, 1])
     plt.yticks(fontsize = 18)
     plt.xlim([ind[0]-width,ind[-1]+len(DICS.keys() )*width])
         
     fig_size = plt.rcParams["figure.figsize"]
-    if args.lgd:
+    if lgd:
        # fig.savefig(outfile+".pdf",format='pdf', bbox_extra_artists=(LGD,), bbox_inches=Bbox(np.array([[0,0],[20,8]])) )
         fig.savefig(outfile+".pdf",format='pdf', bbox_inches='tight')
     else:
