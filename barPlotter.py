@@ -32,12 +32,13 @@ if __name__=="__main__":
     
     DICS = {}
     
-    outliers={'outliers0.0':0, 'outliers0.1':0.1, 'outliers0.2':0.2}
+    outliers={'outliers0.0':0, 'outliers0.1':0.1, 'outliers0.2':0.2, 'outliers0.05':0.05}
+    keys_ordered={'outliers0.05', 'outliers0.0', 'outliers0.1', 'outliers0.2'}
     max_dict = {}
     for filename in args.filenames:
 
         #find out file corresponds to which alg.
-        outlier  = whichKey(filename, keywords=outliers)
+        outlier  = whichKey(filename, keywords=outliers, keys_ordered=keys_ordered)
         stats = loadFile(filename)
     
         #make DICS

@@ -1,10 +1,11 @@
 import argparse
 import logging
-from helpers import dumpFile
+from helpers import dumpFile, loadFile
 from torch.utils.data import Dataset, DataLoader
-from Net import AEC, DAEC 
+from Net import Linear, AEC, DAEC 
 import torch
 from plotter import whichKey
+from datasetGenetaor import  labeledDataset, unlabeledDataset
 
 @torch.no_grad()
 def evalObjective(model, dataloader, outliers_ind):
@@ -18,6 +19,7 @@ def evalObjective(model, dataloader, outliers_ind):
     OBJ_tot = 0.0
     OBJ_dict = {}
     OBJ_nonOutlierstot = 0.0
+   
     OBJ_originalData = 0.0
     for ind, data in enumerate( dataloader ):
         output = model(data)
@@ -37,7 +39,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('filenames', metavar='filename', type=str, nargs='+',
                    help='file where model parameters are stored')
-    parser.add_argument('--Net', choices=['AEC', 'DAEC'])
+    parser.add_argument('--Net', choices=['Linear', 'AEC', 'DAEC'])
     parser.add_argument("--m", type=int, help='dimension of eacg point.')
     parser.add_argument("--m_prime", type=int, help='dimension of the embedding.')
     parser.add_argument("--datafile", type=str, help="File storng dataset with no outliers.")
@@ -53,7 +55,8 @@ if __name__ == "__main__":
     model = model_Net(args.m , args.m_prime)
 
     outliers_ind =  list(torch.load(args.outliers_ind_file).view(-1) )
-    original_data = torch.load(args.datafile)
+   # original_data = torch.load(args.datafile)
+    original_data = loadFile( args.datafile )
     data_loader = DataLoader(original_data, batch_size=1)
     
     keywords =  {'_1.5':'p=1.5', '_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
@@ -68,7 +71,6 @@ if __name__ == "__main__":
         obj_dict, stats = evalObjective(model, data_loader, outliers_ind) 
         logging.info("Norm {}, the total loss for original input data is {}, total loss for non-outliers is {}".format(p, stats['totalLoss'], stats['non_outliersLoss']))
 
-        print(stats)
         DICS[p] = stats
     dumpFile(args.out_statsfile, DICS)
         

@@ -23,9 +23,9 @@ class ADMM():
 
         #Outputs is the functions evaluated after a fowrard pass. 
         #* NOTE: data has the batch dimenion equal to one. 
-        b_size = data.size()[0]
-        if b_size !=1 :
-            raise Exception("batch dimenion is not one, aborting the execution.")
+      #  b_size = data.size()[0]
+      #  if b_size !=1 :
+      #      raise Exception("batch dimenion is not one, aborting the execution.")
         self.data = data
         
         self.convexSolver = solveQuadratic( self.regularizerCoeff )

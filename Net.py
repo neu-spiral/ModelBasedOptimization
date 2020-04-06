@@ -149,10 +149,10 @@ class Linear(Network):
         self.m_prime = m_prime
         self.fc1 = nn.Linear(m, m_prime)
 
-    def forward(self, X):
+    def forward(self, data):
         "Given an input X execute a forward pass."
-        Y =  self.fc1(X) 
-        return Y 
+        X, Y = data
+        return Y - self.fc1(X) 
 
 class AEC(Network):
     "A class for Autoencoders; the input size is m anbd the encoded size is m_prime."

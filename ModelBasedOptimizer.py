@@ -9,9 +9,10 @@ from Net import AEC, DAEC, Linear
 from torch.utils.data import Dataset, DataLoader
 from ADMM import ADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
-from helpers import clearFile, dumpFile, estimate_gFunction
+from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
 import torch.optim as optim
+from datasetGenetaor import labeledDataset, unlabeledDataset
 
 
 #torch.manual_seed(1993)
@@ -23,7 +24,7 @@ class ModelBasedOptimzier:
        via the model based method proposed by Ochs et al. in 2018. 
     """
 
-    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0, g_est=None):
+    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0, g_est=None, lbld_dataset=False):
         #If rank is None the execution is serial. 
         self.rank = rank
 
@@ -55,7 +56,13 @@ class ModelBasedOptimzier:
         #initialize ADMM solvers
         self.ADMMsolvers = []
         for ind, data in  enumerate(data_loader):
-            data = data.to(device)
+            if not lbld_dataset:
+                data = data.to(device)
+            else:
+                for data_part in data:
+                    data_part = data_part.to(device)
+                
+            print(data)
             ADMMsolver = ADMM(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
             self.ADMMsolvers.append( ADMMsolver )
         logger.info("Initialized {} ADMMsolvers".format( ind +1 )) 
@@ -374,7 +381,7 @@ class ModelBasedOptimzier:
         while True:
             new_theta = (1.0 - stp_size) * theta_k + stp_size *  s_k
             obj_new = self.getObjective( new_theta )
-            print(obj_new, obj_k + gamma * DELTA)
+            #print(obj_new, obj_k + gamma * DELTA)
             if obj_new <= obj_k + gamma * DELTA:
                 break 
             stp_size *= delta
@@ -386,7 +393,7 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self, iterations=20, innerIterations=50, l2SquaredSolver='MBO'):
+    def run(self, stopping_eps=1.e-4, iterations=20, innerIterations=50, l2SquaredSolver='MBO'):
         if self.p == -2 and l2SquaredSolver != 'MBO':
             logging.info('Solving ell2 norm squared via {}'.format(l2SquaredSolver) )
             return self.MSE(epochs=iterations)
@@ -422,6 +429,10 @@ class ModelBasedOptimzier:
             trace[k]['OBJ'] = OBJ
             trace[k]['DELTA'] = model_improvement
             trace[k]['time'] = time.time() - t_start
+
+            #terminate if model improvement (a negative number) is within stopping_eps
+            if abs(model_improvement) < stopping_eps:
+                break
         return trace 
            
             
@@ -450,7 +461,9 @@ if __name__=="__main__":
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
     parser.add_argument("--outfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
+    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC'], default='AEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
+    parser.add_argument("--dataset_type", choices=['labeled', 'unlabeled'], default='unlabeled')
     args = parser.parse_args()
 
 
@@ -482,13 +495,15 @@ if __name__=="__main__":
         device = torch.device("cpu")
     
     #initialize model
-    model = AEC(args.m, args.m_prime, device=device)
+    new_model = eval(args.net_model)
+    model = new_model(args.m, args.m_prime, device=device)
     #model = Linear(args.m, args.m_prime)
     model = model.to(device)
 
-    #data 
-    dataset =  torch.load(args.input_file)
-    
+    #load dataset 
+   # dataset =  torch.load(args.input_file)
+    dataset = loadFile(args.input_file)
+ 
     #estimate g function
     if args.p not in [1, 2, -2]:
         g_est = estimate_gFunction(args.p)
@@ -496,7 +511,7 @@ if __name__=="__main__":
         g_est = None
   
     #initialize a model based solver
-    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
+    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est, lbld_dataset =args.dataset_type == 'labeled')
     trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, l2SquaredSolver=args.l2SquaredSolver)
     dumpFile(args.tracefile, trace)
 
