@@ -58,7 +58,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
     V = V.squeeze(0)
 
     if p == 2:
-        return EuclidianProxOp(V, rho)
+        return EuclidianProxOp(V, 1./rho)
 
     elif p == 1:
         return ell1normProxOp(V, rho)
@@ -112,7 +112,7 @@ def norm2squaredProxOp(V, rho):
 def EuclidianProxOp(V, rho):
      """
         Return the 2-norm prox operator for the vector V
-             argmin_X ||X||_2 + rho/2 \|X - V\|_2^2
+             argmin_X rho ||X||_2 + 1/2 \|X - V\|_2^2
      """
      V_norm = torch.norm(V, 2)
      if V_norm < rho:
@@ -179,18 +179,19 @@ if __name__=="__main__":
     parser.add_argument("--rho", type=float, help="rho", default=1.0)
     args = parser.parse_args()
  
-    for p in [1.5, 2.5,4,5]:
-        estimate_g = estimate_gFunction(p)
-        dumpFile('interpolations/p' + str(p),  estimate_g)
-        print('Estimation and saving done for {}'.format(p))
+#    for p in [1.5, 2.5,4,5]:
+#        estimate_g = estimate_gFunction(p)
+#        dumpFile('interpolations/p' + str(p),  estimate_g)
+#        print('Estimation and saving done for {}'.format(p))
 
 #    t_s = time.time()
 #    logging.getLogger().setLevel(logging.INFO) 
-#    V = torch.randn(1, args.n)
-#    V =  torch.abs(V)
-#    U_p = pNormProxOp(V, rho=args.rho, p=args.p)
+    V = torch.randn(1, args.n)
+    V =  torch.abs(V)
+    U_p = pNormProxOp(V, rho=args.rho, p=args.p)
+    print(U_p)
     #U = EuclidianProxOp(V, args.rho)
 #    print (U_p.size())
 #    t_e = time.time()
-#    print (   _testOpt(U_p, V, rho=args.rho, p=args.p) )
+    print (   _testOpt(U_p, V, rho=args.rho, p=args.p) )
 #    print ("Time {} seconds".format(t_e - t_s) )

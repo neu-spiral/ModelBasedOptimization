@@ -25,7 +25,8 @@ if __name__=="__main__":
     parser.add_argument('--normalize',action='store_true',help='Pass to normalize the plot.')
     parser.add_argument('--lgd',action='store_true',help='Pass to make a legened.')
     parser.add_argument('--yaxis',choices=['OBJ','time', 'totalLoss', 'non_outliersLoss'], default='OBJ',help='Determine whether to plot gain or cost')
-    parser.add_argument('--xaxis',choices=['iterations','time', 'outliers'], default='time',help='Iterations or time')
+    parser.add_argument('--xaxis',choices=['iterations','time', '$p_{outliers}$'], default='$p_{outliers}$',help='x-axis label')
+    parser.add_argument('--scale', choices=['log', 'linear'], default='linear')
     parser.add_argument('--plot_type', choices=['bar', 'line'], default='bar')
     args = parser.parse_args()
     
@@ -33,7 +34,7 @@ if __name__=="__main__":
     DICS = {}
     
     outliers={'outliers0.0':0, 'outliers0.1':0.1, 'outliers0.2':0.2, 'outliers0.05':0.05}
-    keys_ordered={'outliers0.05', 'outliers0.0', 'outliers0.1', 'outliers0.2'}
+    keys_ordered=['outliers0.05', 'outliers0.0', 'outliers0.1', 'outliers0.2']
     max_dict = {}
     for filename in args.filenames:
 
@@ -41,6 +42,7 @@ if __name__=="__main__":
         outlier  = whichKey(filename, keywords=outliers, keys_ordered=keys_ordered)
         stats = loadFile(filename)
     
+        print(stats)
         #make DICS
         for key in stats:
             if key not in DICS:
@@ -54,4 +56,4 @@ if __name__=="__main__":
         else:
             y_axis_label = args.yaxis
 
-    barPlotter(DICS=DICS, outfile=args.outfile, x_axis_label=args.xaxis,  y_axis_label = args.yaxis) 
+    barPlotter(DICS=DICS, outfile=args.outfile, x_axis_label=args.xaxis,  y_axis_label = args.yaxis, log_bar=args.scale == 'log') 

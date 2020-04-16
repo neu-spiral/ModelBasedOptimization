@@ -1,4 +1,8 @@
 import argparse
+import matplotlib
+matplotlib.use('Agg')
+
+import matplotlib.pyplot as plt
 from helpers import dumpFile
 import numpy as np
 import torch
@@ -85,4 +89,18 @@ if __name__=="__main__":
    # torch.save(data, outfile)
     dumpFile(outfile, dataset) 
     torch.save(outliers_ind, outfile + 'outliers')
+  
+    #Visualize
+    outliers_ind_list = []
+    for i in range(outliers_ind.size()[0]):
+        outliers_ind_list.append( outliers_ind[i].item())
+    non_outliers_list = [i for i in range(args.n) if i not in outliers_ind_list]
+    
+    plt.plot(data[non_outliers_list,0] ,data[non_outliers_list,1], 'o', label='points', linewidth=3, markersize=10)
+    plt.plot(data[outliers_ind_list,0] ,data[outliers_ind_list,1], 'or', label='outliers', linewidth=0.5, markersize=10)
+    plt.legend()
+    plt.savefig(outfile + '_fig.pdf', format='pdf')
+
+
+
     

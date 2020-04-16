@@ -62,7 +62,6 @@ class ModelBasedOptimzier:
                 for data_part in data:
                     data_part = data_part.to(device)
                 
-            print(data)
             ADMMsolver = ADMM(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
             self.ADMMsolvers.append( ADMMsolver )
         logger.info("Initialized {} ADMMsolvers".format( ind +1 )) 
@@ -450,7 +449,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_rank", type=int)
     parser.add_argument("--input_file", type=str)
-    parser.add_argument("--m", type=int, default=10)
+    parser.add_argument("--m_dim", type=int, default=10)
     parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--batch_size", type=int, default=1)
@@ -496,7 +495,7 @@ if __name__=="__main__":
     
     #initialize model
     new_model = eval(args.net_model)
-    model = new_model(args.m, args.m_prime, device=device)
+    model = new_model(args.m_dim, args.m_prime, device=device)
     #model = Linear(args.m, args.m_prime)
     model = model.to(device)
 

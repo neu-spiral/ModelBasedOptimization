@@ -68,9 +68,10 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
         plt.ylim([0,1.1])
         y_axis_label = "Normalized " + y_axis_label
 
-   
+    plt.ylim([10,600]) 
     for key  in DICS:
         values, labels = formVals(DICS[key])
+        print(values)
     #    ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=alg,log=True)
         RECTS+= ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=key,log=log_bar)
         i+=1
