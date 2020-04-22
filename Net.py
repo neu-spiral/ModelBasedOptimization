@@ -1,4 +1,6 @@
 import torch
+import argparse
+from helpers import loadFile
 import logging
 from torch.multiprocessing import Process
 import os
@@ -6,8 +8,58 @@ import torch.distributed as dist
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as FUNC
+import time
+from datasetGenetaor import unlabeledDataset
+from torch.utils.data import Dataset, DataLoader
 
+class TensorList(list):
+    "A generic class for linear algebra operations on lists of tensors."
 
+   
+    def __add__(self, tensorList_other):
+        outTL = []
+        for ind, tensor in enumerate(self):
+            outTL.append( tensor.add( tensorList_other[ind]  )  )
+        return TensorList(outTL)
+
+    def __sub__(self, tensorList_other):
+        outTL = []
+        for ind, tensor in enumerate(self):
+            outTL.append( tensor.sub( tensorList_other[ind]  )  )
+        return TensorList(outTL)
+
+    def __mul__(self, other):
+        "return the inner product"
+        if type(other) == TensorList:
+            out = 0
+            for ind, tensor in enumerate(self):
+               out += torch.dot(tensor.view(-1), other[ind].view(-1) )
+            return out
+
+        elif type(other) in [float, int]:
+           out = [] 
+           for ind, tensor in enumerate(self):
+               out.append( tensor * other  )
+           return TensorList(out)
+  
+    def __rmul__(self, other):
+        if type(other) in [float, int]:
+            return self.__mul__( other  )        
+
+    def frobeniusNormSq(self):
+        out = 0.0
+        for tensor in self:
+            out += torch.norm(tensor, p=2) ** 2
+        return out     
+
+    def size(self):
+        TL_size = 0
+        for tensor in  self:
+            tensor_size = 1
+            for size_i in tensor.size():
+                tensor_size *= size_i
+            TL_size += tensor_size
+        return TL_size 
 
 class Network(nn.Module):
     "A generic class written for definiing a loss function F(θ; X) where X is the input data and θ is the parametr."
@@ -20,8 +72,8 @@ class Network(nn.Module):
         """
             Return the model parameters as a single vectorized tensor.
         """
-        return torch.cat( [parameter.view(-1) for parameter in self.parameters()] ).unsqueeze(0)
-       # return [param for param in self.parameters()]
+        #return torch.cat( [parameter.view(-1) for parameter in self.parameters()] ).unsqueeze(0)
+        return TensorList([param.data for param in self.parameters()])
 
 
     @torch.no_grad()
@@ -30,8 +82,8 @@ class Network(nn.Module):
             Return gradient w.r.t. model parameters of all model layers  as a single vectorized tensor.
         """
         #print (torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()], 0 ).unsqueeze(0).size())
-        return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()], 0 ).unsqueeze(0)
-       # return [parameter.grad for parameter in self.parameters()] 
+     #   return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()], 0 ).unsqueeze(0)
+        return  TensorList( [parameter.grad.clone()  for parameter in self.parameters()]  )
 
     @torch.no_grad()
     def setParameters(self, params):
@@ -47,6 +99,7 @@ class Network(nn.Module):
             last_Index += param_size_tot
         logging.warning("Model parameters modified.")
             
+
 
     @torch.no_grad()
     def _getJacobian_aux(self, output, i):
@@ -73,7 +126,7 @@ class Network(nn.Module):
 
             
     @torch.no_grad()
-    def getJacobian(self, output, quadratic=False):
+    def getJacobian_old(self, output, quadratic=False):
         """
             Return the Jacobian matrix evaluauted at output, if quadratic is True, the  it also return the suared of the Jacobian. 
         """
@@ -94,6 +147,27 @@ class Network(nn.Module):
         if not quadratic:
             return Jacobian
         return Jacobian, SquaredJacobian
+
+    @torch.no_grad()
+    def getJacobian(self, output, quadratic=False):
+        """
+            Return the Jacobian matrix evaluauted at output, if quadratic is True, the  it also return the suared of the Jacobian. 
+        """
+
+        bath_size, output_size = output.size()
+        if bath_size != 1:
+             raise Exception('Batch dimension is not equal to one.')
+
+        Jacobian = ()
+        for i in range(output_size):
+            Jacobian_i_row = self._getJacobian_aux(output, i)
+            if quadratic:
+                SquaredJacobian = torch.ger(Jacobian_i_row.squeeze(0), Jacobian_i_row.squeeze(0))
+
+            Jacobian += (Jacobian_i_row,)
+        if not quadratic:
+            return Jacobian
+        return Jacobian, SquaredJacobian
     
                     
              
@@ -103,8 +177,9 @@ class Network(nn.Module):
     def vecMult(self, vec, output=None, Jacobian=None, left=False):
         """
            Multiply the Jacobian and the vector vec. Note that output must have batch dimension of 1.
+           Jacobian is a list, where each element is a list of parameter grdaients.
+           vec must be a TensorList object.
         """
-
 
 
         if Jacobian == None:
@@ -116,11 +191,11 @@ class Network(nn.Module):
                 raise Exception('Batch dimension is not equal to one.')
             Jacobian = self.getJacobian(output)
 
-        if left:
-            return torch.matmul(vec, Jacobian)
-        else:
-            return torch.matmul(Jacobian, vec)
-
+        out = []
+        for Jacobian_i in Jacobian:
+            out.append( Jacobian_i * vec )
+        return torch.tensor( out ).unsqueeze(0)
+            
     @torch.no_grad()
     def saveStateDict(self, PATH):
         """
@@ -164,6 +239,9 @@ class AEC(Network):
         self.fc2 = nn.Linear(m_prime, m) 
     def forward(self, X):
         "Given an input X execute a forward pass."
+        if type(X) == list:
+            X = X[0]
+        X = X.view(X.size(0), -1)
         Y = torch.sigmoid( self.fc1(X) )
         Y = self.fc2(Y)
         return Y - X 
@@ -221,10 +299,34 @@ class Embed(Network):
         
 
 if __name__ == "__main__":
-    L = Embed(10,4)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_file", type=str)
+    args = parser.parse_args() 
+    model  = AEC(2, 1)
+
+    theta = model.getParameters()
+    theta_2 =  2* theta 
+   
+    x = torch.randn(1, 2)
+    y = model(x)
+    Jac = model.getJacobian(y)
+
+    print(model.vecMult(vec = theta , Jacobian=Jac).size())
     
-    out = L(range(10)) 
-    print(out)
+
+
+    #dataset = loadFile( args.input_file )
+    #ds_loader = DataLoader(dataset, batch_size=1)
+    #model.getJacobian(output)
+   #print('took {}'.format(time.time() - tS))
+    #for i, data in enumerate(ds_loader):
+        
+    #    img, lbl = data
+    #    output = model(img)
+    #    tS = time.time()
+    #    jac = model.getJacobian(output)
+    #    print(jac[0])
+    #    print('data {} Jacobian computation now has taken {}'.format(i, time.time() - tS))
     
     
     

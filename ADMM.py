@@ -6,7 +6,8 @@ import logging
 from Net import AEC, DAEC, Embed
 from torch.utils.data import Dataset, DataLoader
 import torch
-from helpers import pNormProxOp, clearFile, estimate_gFunction
+from helpers import pNormProxOp, clearFile, estimate_gFunction, loadFile, _testOpt
+from  datasetGenetaor import unlabeledDataset
 import torch.nn as nn
 
 #torch.manual_seed(1993)
@@ -33,35 +34,44 @@ class ADMM():
         self.use_cuda = torch.cuda.is_available()
 
         if self.use_cuda:
-            self.model.cuda()
+            #Move model to GPU
+            self.model = self.model.cuda()
+            #** Move data to GPU
+            if torch.is_tensor(data):
+                data = data.cuda()
+            elif type(data) == list:
+                data_x, data_y = data
+                data = [data_x.cuda(), data_y.cuda()] 
        
 
 
         #Initialize variables.
         self._setVARS() 
-
         
-    def _setVARS(self):
+    def _setVARS(self, quadratic=False):
         """
            Initialize primal, dual and auxiliary variables and compute Jacobian. 
         """
         #Theta is the current model parameter
         self.Theta_k = self.model.getParameters()
+
         #Froward pass for data
-        self.output =  self.model( self.data )
+        output =  self.model( self.data )
         #Compute Jacobian
         with torch.no_grad():
-            Jac, sqJac = self.model.getJacobian(self.output, quadratic=True)
+            if quadratic:
+                Jac, sqJac = self.model.getJacobian(output, quadratic=quadratic)
+                self.squaredJac = sqJac
+            else:
+                Jac = self.model.getJacobian(output, quadratic=quadratic)
             #Get tensor data from the output, the computational graph is not needed here. 
-            self.output = self.output.data
+            self.output = output.data
             self.Jac = Jac
-            self.squaredJac = sqJac
 
             #Initialize Y
             self.primalY = self.output
             #set dimensions
-            self.dim_d = self.Theta_k.size()[-1]
-            self.dim_N = self.output.size()[1]
+            self.dim_d = self.Theta_k.size()
       
             self.primalTheta = self.Theta_k
             #Initialize dual vars U
@@ -76,8 +86,8 @@ class ADMM():
             Update the primal Y variable via prox. operator for the p-norm.
         """
         vec = self.primalTheta - self.Theta_k
-        #vecJacobMult_j = self.model.vecMult(vec, Jacobian=self.Jac)
-        vecJacobMult_j = torch.matmul(vec, self.Jac.T)
+        vecJacobMult_j = self.model.vecMult(vec, Jacobian=self.Jac)
+       # vecJacobMult_j = torch.matmul(vec, self.Jac.T)
 
 
         #Primal residual
@@ -87,6 +97,11 @@ class ADMM():
         oldPrimalY =  self.primalY
         #Update Y 
         self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho, p=self.p, g_est=g_est) 
+
+        
+        logging.debug("Optimality of the proximal operator solution is:")
+        logging.debug( _testOpt(self.primalY, vecJacobMult_j + self.output - self.dual, rho=self.rho, p=self.p) )
+         
         if self.use_cuda:
             self.primalY = self.primalY.cuda()
 
@@ -153,8 +168,9 @@ class ADMM():
             return torch.norm(vecJacobMult_j + self.output, p=2) ** 2
         return torch.norm(vecJacobMult_j + self.output, p=self.p) 
   
-    
+ 
 class privateModelADMM(ADMM):
+    #NOT IMPLEMENTED
     def __init__(self, data, rho=5.0, p=2, squaredConst=1.0, regularizerCoeff=0.0, model=None):
         self.rho = rho
         self.p = p
@@ -257,7 +273,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str)
     parser.add_argument("--m", type=int, default=10)
-    parser.add_argument("--m_prime", type=int,  default=4)
+    parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--iterations", type=int,  default=100)
     parser.add_argument("--logfile", type=str,default="serial.log")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
@@ -271,10 +287,10 @@ if __name__ == "__main__":
 
     #Load dataset
 
-    dataset =  torch.load(args.input_file)
+    dataset =   loadFile(args.input_file)
     data_loader = DataLoader(dataset, batch_size=1) 
     #Instansiate model
-    model = DAEC(args.m, args.m_prime)
+    model = AEC(args.m, args.m_prime)
 
     if args.p not in [1, 2]:
         g_est = estimate_gFunction(args.p)
@@ -283,7 +299,11 @@ if __name__ == "__main__":
 
     #Instansiate ADMMsolvres
     ADMMsolvers = []
+    if torch.cuda.is_available():
+        model = model.cuda()
     for data in data_loader:
+        if torch.cuda.is_available():
+            data = data.cuda()
         ADMMsolver = ADMM(data, model=model, rho=args.rho, p=args.p)
         ADMMsolvers.append(ADMMsolver)
     logging.info("Initialized the ADMMsolvers for {} datapoints".format(len(ADMMsolvers)) )
@@ -293,7 +313,7 @@ if __name__ == "__main__":
         t_start = time.time()
         PRES_TOT = 0.0
         DRES_TOT = 0.0              
-        OBJ_TOT = 0.5 * torch.norm(ADMMsolvers[0].primalTheta - ADMMsolvers[0].Theta_k) ** 2 
+        OBJ_TOT = 0.5 * (ADMMsolvers[0].primalTheta - ADMMsolvers[0].Theta_k).frobeniusNormSq()
         first_ord_TOT = 0.0
         second_ord_TOT = 0.0 
         #Update Y and adapt duals for each solver 
@@ -307,7 +327,7 @@ if __name__ == "__main__":
 
             first_ord_TOT  += first_ord
             second_ord_TOT += second_ord
-           
+        break  
 
         #Aggregate first order and the scond order terms and solve the convex problem for theta
         ADMMsolver_i = ADMMsolvers[0]

@@ -12,6 +12,29 @@ import math
 torch.manual_seed(1993)
 
 
+class MySampler(torch.utils.data.Sampler):
+    def __init__(self, dataset_len):
+        super(MySampler).__init__()
+        self.dataset_len = dataset_len
+    def __len__(self):
+        return self.dataset_len
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:  
+        # single-process data loading, return the full iterator
+            iter_start = 0
+            iter_end = self.dataset_len 
+
+        else:  # in a worker process
+            per_worker = int(math.ceil((self.dataset_len - 1) / float(worker_info.num_workers)))
+            worker_id = worker_info.id
+            iter_start = worker_id * per_worker
+            iter_end = min(iter_start + per_worker, self.dataset_len) 
+        return iter(range(iter_start, iter_end)) 
+      
+    
+
+
 class unlabeledDataset(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
@@ -91,15 +114,15 @@ if __name__=="__main__":
     torch.save(outliers_ind, outfile + 'outliers')
   
     #Visualize
-    outliers_ind_list = []
-    for i in range(outliers_ind.size()[0]):
-        outliers_ind_list.append( outliers_ind[i].item())
-    non_outliers_list = [i for i in range(args.n) if i not in outliers_ind_list]
+    #outliers_ind_list = []
+    #for i in range(outliers_ind.size()[0]):
+    #    outliers_ind_list.append( outliers_ind[i].item())
+    #non_outliers_list = [i for i in range(args.n) if i not in outliers_ind_list]
     
-    plt.plot(data[non_outliers_list,0] ,data[non_outliers_list,1], 'o', label='points', linewidth=3, markersize=10)
-    plt.plot(data[outliers_ind_list,0] ,data[outliers_ind_list,1], 'or', label='outliers', linewidth=0.5, markersize=10)
-    plt.legend()
-    plt.savefig(outfile + '_fig.pdf', format='pdf')
+    #plt.plot(data[non_outliers_list,0] ,data[non_outliers_list,1], 'o', label='points', linewidth=3, markersize=10)
+    #plt.plot(data[outliers_ind_list,0] ,data[outliers_ind_list,1], 'or', label='outliers', linewidth=0.5, markersize=10)
+    #plt.legend()
+    #plt.savefig(outfile + '_fig.pdf', format='pdf')
 
 
 

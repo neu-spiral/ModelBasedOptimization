@@ -24,7 +24,7 @@ class ModelBasedOptimzier:
        via the model based method proposed by Ochs et al. in 2018. 
     """
 
-    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0, g_est=None, lbld_dataset=False):
+    def __init__(self, dataset, model, rho=5.0, p=2, rank=None, regularizerCoeff=0.0, g_est=None):
         #If rank is None the execution is serial. 
         self.rank = rank
 
@@ -48,7 +48,8 @@ class ModelBasedOptimzier:
 
         #Create the model (for loss function)
         self.model = model
-        self.model.to(device)
+        #**
+        self.model = self.model.to(device)
         #Synch model parameters across processes
         self._synchParameters()
          
@@ -56,12 +57,6 @@ class ModelBasedOptimzier:
         #initialize ADMM solvers
         self.ADMMsolvers = []
         for ind, data in  enumerate(data_loader):
-            if not lbld_dataset:
-                data = data.to(device)
-            else:
-                for data_part in data:
-                    data_part = data_part.to(device)
-                
             ADMMsolver = ADMM(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
             self.ADMMsolvers.append( ADMMsolver )
         logger.info("Initialized {} ADMMsolvers".format( ind +1 )) 
@@ -462,7 +457,6 @@ if __name__=="__main__":
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
     parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC'], default='AEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
-    parser.add_argument("--dataset_type", choices=['labeled', 'unlabeled'], default='unlabeled')
     args = parser.parse_args()
 
 
@@ -477,7 +471,7 @@ if __name__=="__main__":
     #Setup logger
     logger = logging.getLogger()
     logger.setLevel(eval("logging."+args.logLevel))
-    logFile = args.logfile + str(args.local_rank)
+    logFile = args.logfile + "_process" + str(args.local_rank)
     clearFile(logFile)
     fh = logging.FileHandler(logFile)
     fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
@@ -510,7 +504,7 @@ if __name__=="__main__":
         g_est = None
   
     #initialize a model based solver
-    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est, lbld_dataset =args.dataset_type == 'labeled')
+    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
     trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, l2SquaredSolver=args.l2SquaredSolver)
     dumpFile(args.tracefile, trace)
 
