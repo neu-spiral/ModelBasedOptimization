@@ -35,6 +35,7 @@ class TensorList(list):
             for ind, tensor in enumerate(self):
                out += torch.dot(tensor.view(-1), other[ind].view(-1) )
             return out
+           
 
         elif type(other) in [float, int]:
            out = [] 
@@ -45,6 +46,12 @@ class TensorList(list):
     def __rmul__(self, other):
         if type(other) in [float, int]:
             return self.__mul__( other  )        
+
+    def __pow__(self, other):
+        out = []
+        for tensor in self:
+            out.append(tensor ** other)
+        return TensorList(out)
 
     def frobeniusNormSq(self):
         out = 0.0
@@ -68,12 +75,22 @@ class Network(nn.Module):
         self.device = device
 
     @torch.no_grad()
-    def getParameters(self):
+    def getParameters(self, trackgrad=False):
         """
             Return the model parameters as a single vectorized tensor.
         """
         #return torch.cat( [parameter.view(-1) for parameter in self.parameters()] ).unsqueeze(0)
-        return TensorList([param.data for param in self.parameters()])
+        if trackgrad:
+            outL = []
+            for param in self.parameters():
+                new_param = torch.zeros(param.size(), requires_grad=True)
+                new_param.copy_( param.data )
+                outL.append( new_param )
+            return TensorList( outL  )
+        else:
+            return TensorList([param.data for param in self.parameters()])
+
+    
 
 
     @torch.no_grad()
@@ -173,8 +190,8 @@ class Network(nn.Module):
              
             
             
-    @torch.no_grad()
-    def vecMult(self, vec, output=None, Jacobian=None, left=False):
+    #@torch.no_grad()
+    def vecMult(self, vec, output=None, Jacobian=None, left=False, trackgrad=False):
         """
            Multiply the Jacobian and the vector vec. Note that output must have batch dimension of 1.
            Jacobian is a list, where each element is a list of parameter grdaients.
@@ -194,7 +211,11 @@ class Network(nn.Module):
         out = []
         for Jacobian_i in Jacobian:
             out.append( Jacobian_i * vec )
-        return torch.tensor( out ).unsqueeze(0)
+        if trackgrad:
+           return out
+        
+        out =  torch.tensor( out).unsqueeze(0)
+        return out
             
     @torch.no_grad()
     def saveStateDict(self, PATH):
@@ -302,20 +323,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str)
     args = parser.parse_args() 
-    model  = AEC(784, 350)
+    model  = AEC(8, 3)
 
-    dataset = loadFile( args.input_file )
-    ds_loader = DataLoader(dataset, batch_size=1)
+    parm = model.getParameters()
+    parm[0] = parm[0] + 1
+    print(parm)
+    print("\n", model.getParameters())
+
+   # dataset = loadFile( args.input_file )
+   # ds_loader = DataLoader(dataset, batch_size=1)
     #model.getJacobian(output)
    #print('took {}'.format(time.time() - tS))
-    for i, data in enumerate(ds_loader):
+   # for i, data in enumerate(ds_loader):
         
-        img, lbl = data
-        output = model(img)
-        tS = time.time()
-        jac = model.getJacobian(output)
+   #     img, lbl = data
+   #     output = model(img)
+   #     tS = time.time()
+   #     jac = model.getJacobian(output)
     #    print(jac[0])
-        print('data {} Jacobian computation now has taken {}'.format(i, time.time() - tS))
+   #     print('data {} Jacobian computation now has taken {}'.format(i, time.time() - tS))
     
     
     

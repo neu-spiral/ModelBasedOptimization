@@ -1,1 +1,12 @@
 INFO:root:Initialized the ADMMsolvers for 100 datapoints
+INFO:root:Solving convex quadratci problem
+INFO:root:Epoch 0 done in 0.4441192150115967(s), total loss is 48.47853335738182
+INFO:root:Epoch 1 done in 0.43712425231933594(s), total loss is 45.341598408995196
+INFO:root:Epoch 2 done in 0.43697285652160645(s), total loss is 42.680881042499095
+INFO:root:Epoch 3 done in 0.44063258171081543(s), total loss is 40.36675624269992
+INFO:root:Epoch 4 done in 0.43848156929016113(s), total loss is 38.31790119037032
+INFO:root:Epoch 5 done in 0.4306159019470215(s), total loss is 36.48104137554765
+INFO:root:Epoch 6 done in 0.426419734954834(s), total loss is 34.81955627724528
+INFO:root:Epoch 7 done in 0.4262974262237549(s), total loss is 33.30699931457639
+INFO:root:Epoch 8 done in 0.42677879333496094(s), total loss is 31.923350647091866
+INFO:root:Epoch 9 done in 0.42798376083374023(s), total loss is 30.652837976813316

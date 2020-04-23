@@ -12,8 +12,8 @@ import torch.nn as nn
 
 #torch.manual_seed(1993)
 
-class ADMM():
-    "ADMM Solver"
+class LocalSolver():
+    "LocalSolver for executing steps of ADMM."
     def __init__(self, data, rho=5.0, p=2, squaredConst=1.0, regularizerCoeff=0.0, model=None):
         self.rho = rho
         self.p = p
@@ -93,12 +93,14 @@ class ADMM():
         #Primal residual
         PRES = self.primalY - self.output - vecJacobMult_j
         #Adapt duals
+
+        
         self.dual += PRES 
         oldPrimalY =  self.primalY
         #Update Y 
         self.primalY = pNormProxOp(vecJacobMult_j + self.output - self.dual, self.rho, p=self.p, g_est=g_est) 
 
-        
+
         logging.debug("Optimality of the proximal operator solution is:")
         logging.debug( _testOpt(self.primalY, vecJacobMult_j + self.output - self.dual, rho=self.rho, p=self.p) )
          
@@ -118,6 +120,29 @@ class ADMM():
         second_ord = self.rho * self.squaredJac 
 
         return first_ord, second_ord
+
+    def getLocalLoss(self, Theta_var):
+        """
+            Return the loss for the current solver (data).
+   
+                 rho/2 ||D_i Theta_var - U_hat||_2^2
+        """
+
+  
+        U_hat = self.dual + self.primalY - self.output + self.model.vecMult(vec=self.Theta_k, Jacobian=self.Jac)
+
+        DTheta =  self.model.vecMult(vec=Theta_var, Jacobian=self.Jac, trackgrad=True)
+
+
+        MSELoss = 0.
+        for i in range(len(DTheta)):
+            MSELoss += ( DTheta[i] - U_hat[0,i] ) ** 2
+
+
+        return self.rho/2. * MSELoss
+        
+
+
 
     @torch.no_grad()
     def updateTheta(self, first_ord, second_ord, newTheta=None):
@@ -169,76 +194,65 @@ class ADMM():
         return torch.norm(vecJacobMult_j + self.output, p=self.p) 
   
  
-class privateModelADMM(ADMM):
-    #NOT IMPLEMENTED
-    def __init__(self, data, rho=5.0, p=2, squaredConst=1.0, regularizerCoeff=0.0, model=None):
-        self.rho = rho
-        self.p = p
-        self.squaredConst  = squaredConst
-        self.regularizerCoeff =  regularizerCoeff
-        self.model = model
-
-
-        #Outputs is the functions evaluated after a fowrard pass. 
-        #* NOTE: data has the batch dimenion equal to one. 
-        b_size = data.size()[0]
-        if b_size !=1 :
-            raise Exception("batch dimenion is not one, aborting the execution.")
-        self.data = data
-
-        self.convexSolver = solveQuadratic( self.regularizerCoeff )
-
-        self.use_cuda = torch.cuda.is_available()
-
-        if self.use_cuda:
-            self.model.cuda()
-        #dimensions
-        m, m_prime = self.model.getParameters().size()
-        self.m = m
-        self.m_prime = m_prime
-        
-        self.privateModel = Embed(self.m_prime, 1)
-
-            #Initialize variables.
-        self._setVARS()
-
-
-    def _setVARS(self):
-        """
-           Initialize primal, dual and auxiliary variables and compute Jacobian. 
-        """
-        #Theta is the current model parameter
-        self.Theta_k = self.model.getParameters()
-        self.privateTheta_k = self.privateModel.getParameters()
-
-        #Froward pass for data
-        self.G = self.model( torch.LongTensor([iind for iind in range(self.m)]) )
-        self.H_i = self.privateModel( torch.LongTensor([iind for iind in range(self.m_prime)]) )
-        self.output = torch.matmul(self.G, self.H_i)
-
-        #Compute Jacobian
-        with torch.no_grad():
-            Jac, sqJac = self.model.getJacobian(self.output, quadratic=True)
-            #Get tensor data from the output, the computational graph is not needed here. 
-            self.output = self.output.data
-            self.Jac = Jac
-            self.squaredJac = sqJac
-
-            #Initialize Y
-            self.primalY = self.output
-            #set dimensions
-            self.dim_d = self.Theta_k.size()[-1]
-            self.dim_N = self.output.size()[1]
-
-            self.primalTheta = self.Theta_k
-            #Initialize dual vars U
-            self.dual = torch.zeros( self.primalY.size() )
-            if self.use_cuda:
-                self.dual = self.dual.cuda()
         
        
- 
 
+class solveConvex:
+    """
+           Solve the following convex problem:
+                 Minimize: quadCoeff * ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
+                 Subj. to:  theta \in Reals,
+           via SGD.
+    """ 
+    def __init__(self, ADMMsolvers, model):
+        self.ADMMsolvers = ADMMsolvers
+        self.model  = model
+
+
+    def solve(self, epochs=10, batch_size=2, learning_rate=0.001):
+        #get current model vraibales
+        theta_VAR = self.model.getParameters(trackgrad=True)        
+
+        logging.info("Solving convex quadratci problem")
+
+        #get optimizer
+        optimizer = torch.optim.SGD(theta_VAR, lr=learning_rate)
+
+
+        for epoch in range(epochs):
+            ts = time.time()
+
+
+            #compute the quadratic proximity loss       
+            proximty_loss =  0.5 * (self.ADMMsolvers[0].primalTheta - theta_VAR).frobeniusNormSq()
+
+            loss = proximty_loss
+            running_loss = proximty_loss.item()
+
+            for ind, ADMMsolver in enumerate( self.ADMMsolvers ):
+
+                loss_i = ADMMsolver.getLocalLoss(theta_VAR )
+
+                #increment loss
+                loss += loss_i
+                running_loss += loss_i.item()
+
+                if ind == len(self.ADMMsolvers) -1 or (ind % batch_size == 0 and ind>0):
+                    #zero out gradients
+                    optimizer.zero_grad()
+
+                    #backprop
+                    loss.backward()
+
+                    #update parameters 
+                    optimizer.step()                  
+
+                    loss = 0.0
+
+            logging.info("Epoch {} done in {}(s), total loss is {}".format(epoch, time.time() - ts, running_loss))                    
+                
+        
+        
 
 class solveQuadratic():
     def __init__(self, quadCoeff=0.0):
@@ -289,6 +303,7 @@ if __name__ == "__main__":
 
     dataset =   loadFile(args.input_file)
     data_loader = DataLoader(dataset, batch_size=1) 
+
     #Instansiate model
     model = AEC(args.m, args.m_prime)
 
@@ -304,41 +319,42 @@ if __name__ == "__main__":
     for data in data_loader:
         if torch.cuda.is_available():
             data = data.cuda()
-        ADMMsolver = ADMM(data, model=model, rho=args.rho, p=args.p)
+        ADMMsolver = LocalSolver(data, model=model, rho=args.rho, p=args.p)
         ADMMsolvers.append(ADMMsolver)
     logging.info("Initialized the ADMMsolvers for {} datapoints".format(len(ADMMsolvers)) )
+
+    #Instantiate convex solvers
+    convexSolver = solveConvex(ADMMsolvers, model)
 
     #ADMM iterations 
     for k in range(args.iterations):
         t_start = time.time()
-        PRES_TOT = 0.0
-        DRES_TOT = 0.0              
-        OBJ_TOT = 0.5 * (ADMMsolvers[0].primalTheta - ADMMsolvers[0].Theta_k).frobeniusNormSq()
-        first_ord_TOT = 0.0
-        second_ord_TOT = 0.0 
-        #Update Y and adapt duals for each solver 
-        for ADMMsolver in ADMMsolvers:
-            DRES, PRES = ADMMsolver.updateYAdaptDuals(g_est)
-            first_ord, second_ord =  ADMMsolver.getCoeefficients()
 
+        #initialize residuals 
+        PRES_TOT = 0.0
+        DRES_TOT = 0.0        
+
+        #compute the quadratic proximity loss       
+        proximty_loss =  0.5 * (ADMMsolvers[0].primalTheta - ADMMsolvers[0].Theta_k).frobeniusNormSq()
+
+        #initialize objective for current iteration
+        OBJ_TOT = proximty_loss.item()
+        loss_TOT = proximty_loss
+
+        for ADMMsolver in ADMMsolvers:
+            #Update Y and adapt duals for each solver 
+            DRES, PRES = ADMMsolver.updateYAdaptDuals(g_est)
+
+            #increment current objective value and residuals            
             OBJ_TOT += ADMMsolver.getObjective()
             PRES_TOT += PRES
             DRES_TOT += DRES        
 
-            first_ord_TOT  += first_ord
-            second_ord_TOT += second_ord
-        break  
-
-        #Aggregate first order and the scond order terms and solve the convex problem for theta
-        ADMMsolver_i = ADMMsolvers[0]
-        DRES_theta = ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
-        DRES_TOT += DRES_theta
-        for ADMMsolver in ADMMsolvers[1:]:
-            ADMMsolver_i.updateTheta( first_ord_TOT, second_ord_TOT, ADMMsolvers[0].primalTheta) 
      
-        t_end = time.time()
-        logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, t_end - t_start, OBJ_TOT ))
-        logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
+            t_end = time.time()
+        convexSolver.solve()
+    #    logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, t_end - t_start, OBJ_TOT ))
+    #    logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
          
 
 
