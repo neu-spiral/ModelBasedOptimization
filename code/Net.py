@@ -103,17 +103,11 @@ class Network(nn.Module):
         return  TensorList( [parameter.grad.clone()  for parameter in self.parameters()]  )
 
     @torch.no_grad()
-    def setParameters(self, params):
+    def setParameters(self, new_params):
         """Set model parameters."""
    
-        new_parameters = params.squeeze(0)
-        last_Index = 0
-        for name, param in self.named_parameters():
-            param_size_tot = 1
-            for parm_size in param.size():
-                param_size_tot *= parm_size
-            param.copy_(new_parameters[last_Index: param_size_tot + last_Index].view( param.size()  ) )
-            last_Index += param_size_tot
+        for param_ind, param in enumerate(self.parameters()):
+            param.copy_( new_params[param_ind].data  )
         logging.warning("Model parameters modified.")
             
 

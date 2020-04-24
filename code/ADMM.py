@@ -29,7 +29,7 @@ class LocalSolver():
       #      raise Exception("batch dimenion is not one, aborting the execution.")
         self.data = data
         
-        self.convexSolver = solveQuadratic( self.regularizerCoeff )
+        #self.convexSolver = solveQuadratic( self.regularizerCoeff )
 
         self.use_cuda = torch.cuda.is_available()
 
@@ -115,8 +115,9 @@ class LocalSolver():
         """
             Return the coefficientes for the first order and the second order terms for updating primalTheta
         """ 
-        self.U_hat = self.dual + self.primalY - self.output + torch.matmul(self.Theta_k, self.Jac.T)
-        first_ord = self.rho * torch.matmul(self.U_hat, self.Jac) 
+
+        U_hat = self.dual + self.primalY - self.output + self.model.vecMult(vec=self.Theta_k, Jacobian=self.Jac)
+        first_ord = self.rho * torch.matmul(U_hat, self.Jac) 
         second_ord = self.rho * self.squaredJac 
 
         return first_ord, second_ord
@@ -145,15 +146,15 @@ class LocalSolver():
 
 
     @torch.no_grad()
-    def updateTheta(self, first_ord, second_ord, newTheta=None):
+    def updateTheta(self, first_ord=None, second_ord=None, newTheta=None):
         """
             Update theta by solving the convex problem
         """
-        
+        oldPrimalTheta = self.primalTheta        
         if newTheta is not None:
             self.primalTheta = newTheta
-            return 0.0
-        oldPrimalTheta = self.primalTheta
+            return (oldPrimalTheta - self.primalTheta).frobeniusNormSq() ** 0.5
+
         b = first_ord + self.squaredConst * self.Theta_k
 
         scaledI = self.squaredConst * torch.eye( self.dim_d ).unsqueeze(0)
@@ -193,27 +194,38 @@ class LocalSolver():
             return torch.norm(vecJacobMult_j + self.output, p=2) ** 2
         return torch.norm(vecJacobMult_j + self.output, p=self.p) 
   
+
+class GlobalSolvers:
+    "Class of solvers for problems that require aggregated information over all data."
+    def __init__(self, ADMMsolvers, model, rank=None):
+        self.ADMMsolvers = ADMMsolvers
+        self.model  = model
+        self.rank = rank
  
         
        
 
-class solveConvex:
+class solveConvex(GlobalSolvers):
     """
            Solve the following convex problem:
                  Minimize: quadCoeff * ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
                  Subj. to:  theta \in Reals,
            via SGD.
     """ 
-    def __init__(self, ADMMsolvers, model):
-        self.ADMMsolvers = ADMMsolvers
-        self.model  = model
 
+    def solve(self, epochs=100, batch_size=None, learning_rate=0.001):
+        #default batch_size is all samples
+        if batch_size == None:
+            batch_size = len(self.ADMMsolvers)
 
-    def solve(self, epochs=10, batch_size=2, learning_rate=0.001):
         #get current model vraibales
         theta_VAR = self.model.getParameters(trackgrad=True)        
 
-        logging.info("Solving convex quadratci problem")
+        #initialize thet_VAR to primalTheta
+        for var_ind, var in enumerate( self.ADMMsolvers[0].primalTheta ):
+            theta_VAR[var_ind].data.copy_( var )
+
+        logging.info("Solving convex quadratic problem")
 
         #get optimizer
         optimizer = torch.optim.SGD(theta_VAR, lr=learning_rate)
@@ -228,6 +240,7 @@ class solveConvex:
 
             loss = proximty_loss
             running_loss = proximty_loss.item()
+            running_grad_norm = 0.
 
             for ind, ADMMsolver in enumerate( self.ADMMsolvers ):
 
@@ -244,24 +257,67 @@ class solveConvex:
                     #backprop
                     loss.backward()
 
+                    for var in theta_VAR:
+                        running_grad_norm += torch.norm(var.grad, p=1)
+
+                        #add up gradients across processes if multiple processes are running
+                        if self.rank != None:
+                           torch.distributed.all_reduce(var.grad) 
+
                     #update parameters 
                     optimizer.step()                  
 
                     loss = 0.0
 
             logging.info("Epoch {} done in {}(s), total loss is {}".format(epoch, time.time() - ts, running_loss))                    
-                
+            logging.info("Total gradient is {}".format(running_grad_norm))
+
+        return theta_VAR        
+
+   # @torch.no_grad()
+    def updateTheta(self):
+        """
+            Update theta by in all local solver instances.
+        """
+        #update theta by solving the quadratic convex problem via gradient descent
+        newTheta = self.solve()
+
+        oldPrimalTheta = self.ADMMsolvers[0].primalTheta
+        for ADMMsolver in self.ADMMsolvers:
+            for var_ind, var in enumerate( newTheta ):
+                ADMMsolver.primalTheta[var_ind].copy_( var.data )
+        #return dual residual 
+        return (oldPrimalTheta - self.ADMMsolvers[0].primalTheta).frobeniusNormSq() ** 0.5
         
         
 
-class solveQuadratic():
-    def __init__(self, quadCoeff=0.0):
+class solveQuadratic(GlobalSolvers):
+    def __init__(self,ADMMsolvers, model, rank=None, quadCoeff=0.0):
         """
            Solve the following convex problem:
                  Minimize: quadCoeff * ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
                  Subj. to:  theta \in Reals,
         """
+        super(solveQuadratic, self).__init__(ADMMsolvers, model, rank)
         self.quadCoeff = quadCoeff 
+
+
+    @torch.no_grad()
+    def _getCoeff(self):
+        first_ord_TOT = 0.
+        second_ord_TOT = 0.
+
+        for ADMMsolver in self.ADMMsolvers:
+            first_ord, second_ord =  ADMMsolver.getCoeefficients()        
+            #add first order and second order coeffocients
+            first_ord_TOT  += first_ord
+            second_ord_TOT += second_ord
+
+            if self.rank != None:
+                torch.distributed.all_reduce(first_ord_TOT)
+                torch.distributed.all_reduce(second_ord_TOT) 
+
+    @torch.no_grad()
     def solve(self, A, b):
         #Qudartic term due to the norm2 squared regularizer        
         A_regulrizer = self.quadCoeff * torch.eye( A.size()[1]  )
@@ -316,16 +372,22 @@ if __name__ == "__main__":
     ADMMsolvers = []
     if torch.cuda.is_available():
         model = model.cuda()
-    for data in data_loader:
+
+    #load data 
+    for ind, data in enumerate(data_loader):
         if torch.cuda.is_available():
             data = data.cuda()
         ADMMsolver = LocalSolver(data, model=model, rho=args.rho, p=args.p)
         ADMMsolvers.append(ADMMsolver)
+        print(ind)
+        if ind == 10:
+            break
     logging.info("Initialized the ADMMsolvers for {} datapoints".format(len(ADMMsolvers)) )
 
     #Instantiate convex solvers
-    convexSolver = solveConvex(ADMMsolvers, model)
+    globalSolver = solveConvex(ADMMsolvers, model)
 
+    
     #ADMM iterations 
     for k in range(args.iterations):
         t_start = time.time()
@@ -340,7 +402,9 @@ if __name__ == "__main__":
         #initialize objective for current iteration
         OBJ_TOT = proximty_loss.item()
         loss_TOT = proximty_loss
+        print(k)
 
+        ind = 0
         for ADMMsolver in ADMMsolvers:
             #Update Y and adapt duals for each solver 
             DRES, PRES = ADMMsolver.updateYAdaptDuals(g_est)
@@ -349,12 +413,19 @@ if __name__ == "__main__":
             OBJ_TOT += ADMMsolver.getObjective()
             PRES_TOT += PRES
             DRES_TOT += DRES        
+            print(ind)
+            ind += 1
 
      
-            t_end = time.time()
-        convexSolver.solve()
-    #    logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, t_end - t_start, OBJ_TOT ))
-    #    logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
+        #Update theta via convexSolvers
+        DRES_theta = globalSolver.updateTheta() 
+   
+        DRES_TOT += DRES_theta 
+
+        
+        t_end = time.time()
+        logging.info("Iteration {} is done in {} (s), OBJ is {} ".format(k, t_end - t_start, OBJ_TOT ))
+        logging.info("Iteration {}, PRES is {}, DRES is {}".format(k, PRES_TOT, DRES_TOT) )
          
 
 

@@ -7,7 +7,7 @@ import  torch.utils
 from torchvision import datasets, transforms
 from Net import AEC, DAEC, Linear
 from torch.utils.data import Dataset, DataLoader
-from ADMM import ADMM
+from ADMM import LocalSolver, solveConvex
 from torch.nn.parallel import DistributedDataParallel as DDP
 from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
@@ -39,6 +39,7 @@ class ModelBasedOptimzier:
 
         #estimator for g function (used in runADMM)
         self.g_est = g_est
+
         #Check if GPU is available 
         if torch.cuda.is_available():
             device = torch.device("cuda:{}".format(0))
@@ -57,9 +58,15 @@ class ModelBasedOptimzier:
         #initialize ADMM solvers
         self.ADMMsolvers = []
         for ind, data in  enumerate(data_loader):
-            ADMMsolver = ADMM(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
+            ADMMsolver = LocalSolver(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
             self.ADMMsolvers.append( ADMMsolver )
         logger.info("Initialized {} ADMMsolvers".format( ind +1 )) 
+
+
+        #Instantiate (global) convex solvers
+        self.globalSolver = solveConvex(self.ADMMsolvers, model, rank)
+        logger.info("Initialized the global solver for updating Theta.")
+
         #p is the parameter in lp-norm
         #NOTE: here, p = -2  means l2-norm squared
         if p == -2:
@@ -79,7 +86,8 @@ class ModelBasedOptimzier:
         #Synch model parameters
         parameters = self.model.getParameters()
         if self.rank != None:
-            torch.distributed.broadcast(parameters, 0)
+            for parameter in parameters:
+                torch.distributed.broadcast(parameter, 0)
             self.model.setParameters( parameters )
             logger.info("Synchronized model parameters across processes.")
 
@@ -101,27 +109,28 @@ class ModelBasedOptimzier:
             PRES_TOT = 0.0
             DRES_TOT = 0.0
             OBJ_TOT = 0.0
-            squaredLoss =  0.5 * torch.norm(self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k) ** 2
-            first_ord_TOT = 0.0
-            second_ord_TOT = 0.0
+            squaredLoss =  0.5 * (self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k).frobeniusNormSq() 
+           # first_ord_TOT = 0.0
+           # second_ord_TOT = 0.0
 
             #Update Y and adapt duals for each solver 
             last = time.time()
             for ADMMsolver in self.ADMMsolvers:
                 #Eval objective for each term (solver)
-                OBJ_TOT += ADMMsolver.evalModelLoss()
+                OBJ_TOT += ADMMsolver.getObjective()
+
                 #Eval residuals for each term (solver)
                 DRES, PRES = ADMMsolver.updateYAdaptDuals( self.g_est )
-                #Eval first and second order terms for each term (solver)
-                first_ord, second_ord =  ADMMsolver.getCoeefficients()
+               # #Eval first and second order terms for each term (solver)
+               # first_ord, second_ord =  ADMMsolver.getCoeefficients()
 
 
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
 
-                first_ord_TOT  += first_ord
+               # first_ord_TOT  += first_ord
                 
-                second_ord_TOT += second_ord
+               # second_ord_TOT += second_ord
 
             now = time.time()
             logger.debug('Updated primal Y variables in {}(s)'.format(now - last) )
@@ -129,8 +138,8 @@ class ModelBasedOptimzier:
             now = time.time()
 
             if self.rank != None:
-                torch.distributed.all_reduce(first_ord_TOT)
-                torch.distributed.all_reduce(second_ord_TOT)
+              #  torch.distributed.all_reduce(first_ord_TOT)
+              #  torch.distributed.all_reduce(second_ord_TOT)
                 torch.distributed.all_reduce(PRES_TOT)
                 torch.distributed.all_reduce(DRES_TOT)
                 torch.distributed.all_reduce(OBJ_TOT)
@@ -139,11 +148,16 @@ class ModelBasedOptimzier:
                 logger.debug('Reduction took {}(s)'.format(time.time() - now))
 
             #Compute Theta (proc 0 is responsible for this)
-            ADMMsolver_i = self.ADMMsolvers[0]
-            DRES_theta = ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
+         #   ADMMsolver_i = self.ADMMsolvers[0]
+         #   DRES_theta = ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
             #Update Theta for the rest of the solvers across processes
-            for ADMMsolver in self.ADMMsolvers[1:]:
-                ADMMsolver.updateTheta(first_ord_TOT, second_ord_TOT, self.ADMMsolvers[0].primalTheta)
+         #   for ADMMsolver in self.ADMMsolvers[1:]:
+         #       ADMMsolver.updateTheta(first_ord_TOT, second_ord_TOT, self.ADMMsolvers[0].primalTheta)
+
+            #Update theta via convexSolvers
+            DRES_theta = self.globalSolver.updateTheta()
+
+
             DRES_TOT += DRES_theta ** 2
 
             #square root 
@@ -505,14 +519,14 @@ if __name__=="__main__":
   
     #initialize a model based solver
     MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
-    trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, l2SquaredSolver=args.l2SquaredSolver)
-    dumpFile(args.tracefile, trace)
+ #   trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, l2SquaredSolver=args.l2SquaredSolver)
+ #   dumpFile(args.tracefile, trace)
 
     #save model parameters
-    model.saveStateDict( args.outfile )
+ #   model.saveStateDict( args.outfile )
    
  #   theta, trace_SGD =  MBO.runSGD(args.inner_iterations, args.batch_size)
- #   delta, trace_ADMM = MBO.runADMM(args.inner_iterations )
+    delta, trace_ADMM = MBO.runADMM(args.inner_iterations )
     
 
  #   with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:
