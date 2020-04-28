@@ -119,6 +119,7 @@ class LocalSolver():
         U_hat = self.dual + self.primalY - self.output + self.model.vecMult(vec=self.Theta_k, Jacobian=self.Jac)
 
         first_ord = self.rho * self.model.vecMult(vec=U_hat, Jacobian=self.Jac, left=True) 
+ 
 
         if qudratic:
             second_ord = self.rho * self.squaredJac 
@@ -326,7 +327,7 @@ class solveWoodbury(GlobalSolvers):
                     for row_ind_j, row_j in   enumerate(ADMMsolver_j.Jac):
                         A_row_ind = solver_ind_i * self.dim_N + row_ind_i
                         A_col_ind = solver_ind_j * self.dim_N + row_ind_j
-                        A[A_row_ind, A_col_ind] += row_i * row_j
+                        A[A_row_ind, A_col_ind] += row_i * row_j * ADMMsolvers[0].rho
 
         self.Amat = A
  
@@ -350,7 +351,25 @@ class solveWoodbury(GlobalSolvers):
 
         return first_ord_TOT
 
-    def _multMatVec(self, ADMMsolvers, b):
+    def _debug(self, ADMMsolvers, b):
+        MAT = []
+        b_vec = b.getTensor()
+        for ADMMsolver in ADMMsolvers:
+            out = self.model(ADMMsolver.data)
+            Jac_Mat = self.model.getJacobian_old(out)
+            MAT.append(Jac_Mat)
+        Jac_Cat = torch.cat(MAT, 0) 
+
+        D_transpose_b = torch.matmul(Jac_Cat, b_vec)
+
+        Amat = torch.eye(self.dim_N * self.dim_n) + torch.matmul(Jac_Cat, Jac_Cat.T)
+        
+        matInv_D_transpose_b, decom = torch.solve(D_transpose_b.unsqueeze(1), Amat)
+
+        D_matInv_D_transpose_b = torch.matmul(Jac_Cat.T, matInv_D_transpose_b)
+        return D_matInv_D_transpose_b
+
+    def _multMatVec(self, ADMMsolvers, b, debug_val=None):
         """Compute the matrix inversion and product:
 
                D(I_{nN} + D^T D)^-1 D^T b,
@@ -361,18 +380,20 @@ class solveWoodbury(GlobalSolvers):
         #initalize
         D_transpose_b = torch.zeros(self.dim_N * self.dim_n, 1)
         
+        #populate values in D_transpose_b
         for solver_ind_i, ADMMsolver_i in enumerate(ADMMsolvers):
             for row_ind_i, row_i in enumerate(ADMMsolver_i.Jac):
                 ind = solver_ind_i * self.dim_N + row_ind_i
                 D_transpose_b[ind] = row_i * b
 
-
+   
         matInv_D_transpose_b, decom = torch.solve(D_transpose_b, self.Amat)
+
 
         for solver_ind_i, ADMMsolver_i in enumerate(ADMMsolvers):
 
             #compute D_i times matInv_D_transpose_b for each i (ADMMsolver)
-            D_matInv_D_transpose_b_i = self.model.vecMult(vec=matInv_D_transpose_b[solver_ind_i * self.dim_N: (solver_ind_i + 1) * self.dim_N], left=True, Jacobian=ADMMsolver_i.Jac)
+            D_matInv_D_transpose_b_i = self.model.vecMult(vec=matInv_D_transpose_b[solver_ind_i * self.dim_N: (solver_ind_i + 1) * self.dim_N].T, left=True, Jacobian=ADMMsolver_i.Jac)
        
 
             if solver_ind_i  == 0:
@@ -389,9 +410,13 @@ class solveWoodbury(GlobalSolvers):
             self.Amat
         except AttributeError:
             self._setMat(ADMMsolvers)
- 
+      
+        #debugging 
+        #debug_val = self._debug(ADMMsolvers, b)
+
         D_matInv_D_transpose_b = self._multMatVec(ADMMsolvers, b)
-        sol = ADMMsolvers[0].squaredConst * b - D_matInv_D_transpose_b 
+        #print(debug_val, D_matInv_D_transpose_b)
+        sol = ADMMsolvers[0].squaredConst * b - ADMMsolvers[0].rho * D_matInv_D_transpose_b 
 
         #test solution
         self.testSolution(ADMMsolvers, b, sol)
@@ -404,9 +429,9 @@ class solveWoodbury(GlobalSolvers):
         b_solved = sol * ADMMsolvers[0].squaredConst
         for ADMMsolver in ADMMsolvers:
             D_i_sol = self.model.vecMult(vec=sol, Jacobian=ADMMsolver.Jac)
-            b_solved +=  self.model.vecMult(vec=D_i_sol, left=True, Jacobian=ADMMsolver.Jac)
+            b_solved +=  self.model.vecMult(vec=D_i_sol, left=True, Jacobian=ADMMsolver.Jac) * ADMMsolver.rho
 
-        print(b_solved - b)
+        print( b_solved - b)
        
             
     def updateTheta(self, ADMMsolvers):

@@ -140,9 +140,11 @@ class ModelBasedOptimzier:
                 #log information 
                 logger.debug('Reduction took {}(s)'.format(time.time() - now))
 
+            last = time.time()
             #Update theta via convexSolvers
             DRES_theta = globalSolver.updateTheta( ADMMsolvers)
 
+            logger.debug("Updates Theta variables in {}(s)".format(time.time() - last) )
 
             DRES_TOT += DRES_theta ** 2
 
@@ -175,7 +177,7 @@ class ModelBasedOptimzier:
                 #if running multiple processes sum up accross processes
                 if self.rank != None:
                     torch.distributed.all_reduce(delta_TOT)
-                delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
+                delta_TOT += (globalSolver.primalTheta - globalSolver.Theta_k).frobeniusNormSq() 
 
                 if delta_TOT < 0:
                     break
@@ -516,7 +518,7 @@ if __name__=="__main__":
  #   model.saveStateDict( args.outfile )
    
  #   theta, trace_SGD =  MBO.runSGD(args.inner_iterations, args.batch_size)
-    delta, trace_ADMM = MBO.runADMM(ADMMsolvers=MBO.ADMMsolvers[0:2], iterations=args.inner_iterations )
+    delta, trace_ADMM = MBO.runADMM(ADMMsolvers=MBO.ADMMsolvers[0:1], iterations=args.inner_iterations )
     
 
  #   with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:

@@ -59,6 +59,13 @@ class TensorList(list):
             out.append(tensor ** other)
         return TensorList(out)
 
+    def getTensor(self):
+        "Return a tneosr that is the vectorization and concatenation of th tensors in the TensorList."
+        list_of_tens = []
+        for tensor in self:
+            list_of_tens.append(tensor.view(-1))
+        return torch.cat(list_of_tens, 0)
+
     def frobeniusNormSq(self):
         out = 0.0
         for tensor in self:
@@ -102,11 +109,17 @@ class Network(nn.Module):
     @torch.no_grad()
     def getGrads(self):
         """
-            Return gradient w.r.t. model parameters of all model layers  as a single vectorized tensor.
+            Return gradient w.r.t. model parameters of all model layers  as a TensorList object.
         """
-        #print (torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()], 0 ).unsqueeze(0).size())
-     #   return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()], 0 ).unsqueeze(0)
         return  TensorList( [parameter.grad.clone()  for parameter in self.parameters()]  )
+
+    @torch.no_grad()
+    def getGrads_old(self):
+        """
+            Return gradient w.r.t. model parameters of all model layers  as a vectorized tensor.
+            NOTE: This this method is only for debugging and is inefficient in practice.
+        """        
+        return torch.cat( [parameter.grad.view(-1) for parameter in self.parameters()], 0 ).unsqueeze(0)
 
     @torch.no_grad()
     def setParameters(self, new_params):
@@ -118,8 +131,9 @@ class Network(nn.Module):
             
 
 
+   #*NOTE
     @torch.no_grad()
-    def _getJacobian_aux(self, output, i):
+    def _getJacobian_aux(self, output, i, debug=False):
         """
           Return the i-th row of the Jacobian, i.e., the gradient of the i-th node in the output layer, w.r.t. network paraneters
 
@@ -139,6 +153,8 @@ class Network(nn.Module):
         output.backward(selector, retain_graph=True )
 
         #Get grads
+        if debug:
+             return self.getGrads_old()
         return  self.getGrads()
 
             
@@ -152,7 +168,7 @@ class Network(nn.Module):
         if bath_size != 1:
              raise Exception('Batch dimension is not equal to one.')
         for i in range(output_size):
-            Jacobian_i_row = self._getJacobian_aux(output, i)
+            Jacobian_i_row = self._getJacobian_aux(output, i, debug=True)
             if  i == 0:
                 Jacobian = Jacobian_i_row
                 if quadratic:
@@ -177,7 +193,7 @@ class Network(nn.Module):
 
         Jacobian = ()
         for i in range(output_size):
-            Jacobian_i_row = self._getJacobian_aux(output, i)
+            Jacobian_i_row = self._getJacobian_aux(output=output, i=i)
             if quadratic:
                 SquaredJacobian = torch.ger(Jacobian_i_row.squeeze(0), Jacobian_i_row.squeeze(0))
 
@@ -217,14 +233,24 @@ class Network(nn.Module):
                 raise Exception('Batch dimension is not equal to one.')
             Jacobian = self.getJacobian(output)
 
+        #left multiplication
         if left:
+            #assert that vec has the right dimensions
+            #batch_size must be 1
+            assert vec.size()[0] == 1, 'vec must have a batch dimension of 1.' 
+            #the number of rows in vec must be equal to the number of elements (rows) in Jacobian
+            assert vec.size()[1] == len(Jacobian), 'number of rows do not match' 
+
             for row_ind, Jacobian_i_row in enumerate(Jacobian):
                 if row_ind ==0:
                     out = Jacobian_i_row * float(vec[0, row_ind])
                 else:
                     out = out + Jacobian_i_row * float(vec[0, row_ind])
-                return out 
-                
+
+            return out 
+
+        #right multiplication 
+        assert type(vec) == TensorList, "pass a TensorList as vec"        
         out = []
         for Jacobian_i in Jacobian:
             out.append( Jacobian_i * vec )
@@ -347,12 +373,17 @@ if __name__ == "__main__":
     model  = AEC(4, 2)
 
     parm = model.getParameters()
-    print(parm, "\n")
-    parm1 = parm * 2
-    parm += parm1
+    x = torch.randn(1,4)
+    
 
-    print(parm,"\n", parm1)
+    out = model(x)
+    Jac = model.getJacobian(out)
+    print(model.vecMult(vec=parm, Jacobian=Jac))
 
+    out = model(x)
+    Jac_mat = model.getJacobian_old(out)
+    parm_tens = parm.getTensor()
+    print(torch.matmul(Jac_mat, parm_tens))
    # dataset = loadFile( args.input_file )
    # ds_loader = DataLoader(dataset, batch_size=1)
     #model.getJacobian(output)
