@@ -22,6 +22,12 @@ class TensorList(list):
             outTL.append( tensor.add( tensorList_other[ind]  )  )
         return TensorList(outTL)
 
+    def __iadd__(self, tensorList_other):
+        outTL = []
+        for ind, tensor in enumerate(self):
+            outTL.append( tensor.add_( tensorList_other[ind]  )  )
+        return TensorList(outTL)
+
     def __sub__(self, tensorList_other):
         outTL = []
         for ind, tensor in enumerate(self):
@@ -88,7 +94,7 @@ class Network(nn.Module):
                 outL.append( new_param )
             return TensorList( outL  )
         else:
-            return TensorList([param.data for param in self.parameters()])
+            return TensorList([param.data  for param in self.parameters()])
 
     
 
@@ -185,11 +191,20 @@ class Network(nn.Module):
             
             
     #@torch.no_grad()
-    def vecMult(self, vec, output=None, Jacobian=None, left=False, trackgrad=False):
+    def vecMult(self, vec, output=None, left=False, Jacobian=None, trackgrad=False):
         """
-           Multiply the Jacobian and the vector vec. Note that output must have batch dimension of 1.
+           Multiply the Jacobian and the vector vec:
+
+                   D_i \times vec, D_i \in R^{N \times d}, vec \in R^d,
+            vec must be a TensorList object.
+
+           if left:
+   
+                   D_i^T \times vec, D_i \in R^{N \times d}, vec \in R^N.
+           vec must be a pytorch tensor object.
+
+           Note that output must have batch dimension of 1.
            Jacobian is a list, where each element is a list of parameter grdaients.
-           vec must be a TensorList object.
         """
 
 
@@ -202,6 +217,14 @@ class Network(nn.Module):
                 raise Exception('Batch dimension is not equal to one.')
             Jacobian = self.getJacobian(output)
 
+        if left:
+            for row_ind, Jacobian_i_row in enumerate(Jacobian):
+                if row_ind ==0:
+                    out = Jacobian_i_row * float(vec[0, row_ind])
+                else:
+                    out = out + Jacobian_i_row * float(vec[0, row_ind])
+                return out 
+                
         out = []
         for Jacobian_i in Jacobian:
             out.append( Jacobian_i * vec )
@@ -210,6 +233,10 @@ class Network(nn.Module):
         
         out =  torch.tensor( out).unsqueeze(0)
         return out
+
+                    
+
+     
             
     @torch.no_grad()
     def saveStateDict(self, PATH):
@@ -317,12 +344,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str)
     args = parser.parse_args() 
-    model  = AEC(8, 3)
+    model  = AEC(4, 2)
 
     parm = model.getParameters()
-    parm[0] = parm[0] + 1
-    print(parm)
-    print("\n", model.getParameters())
+    print(parm, "\n")
+    parm1 = parm * 2
+    parm += parm1
+
+    print(parm,"\n", parm1)
 
    # dataset = loadFile( args.input_file )
    # ds_loader = DataLoader(dataset, batch_size=1)

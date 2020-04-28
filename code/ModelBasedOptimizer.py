@@ -7,7 +7,7 @@ import  torch.utils
 from torchvision import datasets, transforms
 from Net import AEC, DAEC, Linear
 from torch.utils.data import Dataset, DataLoader
-from ADMM import LocalSolver, solveConvex
+from ADMM import LocalSolver, solveConvex, solveWoodbury
 from torch.nn.parallel import DistributedDataParallel as DDP
 from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
@@ -60,12 +60,14 @@ class ModelBasedOptimzier:
         for ind, data in  enumerate(data_loader):
             ADMMsolver = LocalSolver(data=data, rho=rho, p=p, regularizerCoeff=regularizerCoeff, model=self.model)
             self.ADMMsolvers.append( ADMMsolver )
-        logger.info("Initialized {} ADMMsolvers".format( ind +1 )) 
+
+        self.dataset_size = len(self.ADMMsolvers)
+        logger.info("Initialized {} ADMMsolvers".format( self.dataset_size )) 
 
 
         #Instantiate (global) convex solvers
-        self.globalSolver = solveConvex(self.ADMMsolvers, model, rank)
-        logger.info("Initialized the global solver for updating Theta.")
+        #self.globalSolver = solveConvex(model, rank)
+        #logger.info("Initialized the global solver for updating Theta.")
 
         #p is the parameter in lp-norm
         #NOTE: here, p = -2  means l2-norm squared
@@ -92,14 +94,17 @@ class ModelBasedOptimzier:
             logger.info("Synchronized model parameters across processes.")
 
 
-    def runADMM(self, iterations=50, eps=1e-04):
+    def runADMM(self, ADMMsolvers, iterations=50, eps=1e-04):
         """
           Execute the ADMM algrotihm for the current model function.
         """
+
+        #Instantiate (global) convex solvers
+        globalSolver = solveWoodbury(model, self.rank)
        
         #Initialize solver variables
-        for ADMMsolver in self.ADMMsolvers:
-            ADMMsolver._setVARS()
+        for ADMMsolver in ADMMsolvers:
+            ADMMsolver.setVARS(primalTheta = globalSolver.primalTheta, Theta_k = globalSolver.Theta_k)
         
         t_start = time.time()
         #trace to keep trak of progress
@@ -109,53 +114,34 @@ class ModelBasedOptimzier:
             PRES_TOT = 0.0
             DRES_TOT = 0.0
             OBJ_TOT = 0.0
-            squaredLoss =  0.5 * (self.ADMMsolvers[0].primalTheta - self.ADMMsolvers[0].Theta_k).frobeniusNormSq() 
-           # first_ord_TOT = 0.0
-           # second_ord_TOT = 0.0
+            squaredLoss =  0.5 * (globalSolver.primalTheta - globalSolver.Theta_k).frobeniusNormSq() 
 
             #Update Y and adapt duals for each solver 
             last = time.time()
-            for ADMMsolver in self.ADMMsolvers:
+            for ADMMsolver in ADMMsolvers:
+
                 #Eval objective for each term (solver)
                 OBJ_TOT += ADMMsolver.getObjective()
 
                 #Eval residuals for each term (solver)
                 DRES, PRES = ADMMsolver.updateYAdaptDuals( self.g_est )
-               # #Eval first and second order terms for each term (solver)
-               # first_ord, second_ord =  ADMMsolver.getCoeefficients()
-
 
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
 
-               # first_ord_TOT  += first_ord
-                
-               # second_ord_TOT += second_ord
-
             now = time.time()
             logger.debug('Updated primal Y variables in {}(s)'.format(now - last) )
-            #Aggregate first_ord_TOT and second_ord_TOT across processes
-            now = time.time()
 
+            #Aggregate first_ord_TOT and second_ord_TOT across processes
             if self.rank != None:
-              #  torch.distributed.all_reduce(first_ord_TOT)
-              #  torch.distributed.all_reduce(second_ord_TOT)
                 torch.distributed.all_reduce(PRES_TOT)
                 torch.distributed.all_reduce(DRES_TOT)
                 torch.distributed.all_reduce(OBJ_TOT)
-
-
+                #log information 
                 logger.debug('Reduction took {}(s)'.format(time.time() - now))
 
-            #Compute Theta (proc 0 is responsible for this)
-         #   ADMMsolver_i = self.ADMMsolvers[0]
-         #   DRES_theta = ADMMsolver_i.updateTheta(first_ord_TOT, second_ord_TOT)
-            #Update Theta for the rest of the solvers across processes
-         #   for ADMMsolver in self.ADMMsolvers[1:]:
-         #       ADMMsolver.updateTheta(first_ord_TOT, second_ord_TOT, self.ADMMsolvers[0].primalTheta)
-
             #Update theta via convexSolvers
-            DRES_theta = self.globalSolver.updateTheta()
+            DRES_theta = globalSolver.updateTheta( ADMMsolvers)
 
 
             DRES_TOT += DRES_theta ** 2
@@ -177,33 +163,26 @@ class ModelBasedOptimzier:
             logger.debug("Iteration {0}, PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
 
             #terminate if desired convergence achieved
-            if PRES_TOT <= eps and DRES_TOT <= eps:
+            if k ==  iterations - 1 or (PRES_TOT <= eps and DRES_TOT <= eps):
                 #Evaluate delta (model improvement) 
                 delta_TOT = 0.0
-                for ADMMsolver in self.ADMMsolvers:
+                for ADMMsolver in ADMMsolvers:
                     if self.p == -2:
                         delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=2) ** 2 )
                     else:
                         delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=self.p) )
+
+                #if running multiple processes sum up accross processes
                 if self.rank != None:
                     torch.distributed.all_reduce(delta_TOT)
                 delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
+
                 if delta_TOT < 0:
                     break
  
         #log last iteration stats
         logger.info("Inner ADMM done in {0} iterations, took  {1:.2f}(s), final objective is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
         logger.info("PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
-        #Evaluate delta (model improvement) 
-        delta_TOT = 0.0
-        for ADMMsolver in self.ADMMsolvers:
-            if self.p == -2:
-                delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=2) ** 2 )
-            else:
-                delta_TOT += ( ADMMsolver.evalModelLoss( ADMMsolver.primalTheta  ) - torch.norm(ADMMsolver.output, p=self.p) )
-        if self.rank != None:
-            torch.distributed.all_reduce(delta_TOT)
-        delta_TOT += torch.norm(ADMMsolver.primalTheta - ADMMsolver.Theta_k, p=2) ** 2
                         
         return delta_TOT, trace
 
@@ -375,7 +354,7 @@ class ModelBasedOptimzier:
 
 
     @torch.no_grad()
-    def updateVariable(self, DELTA):
+    def updateVariable(self, DELTA, maxiters=100):
 
         last = time.time()
         delta =0.85
@@ -386,7 +365,7 @@ class ModelBasedOptimzier:
         theta_k = self.ADMMsolvers[0].Theta_k
         s_k = self.ADMMsolvers[0].primalTheta
         stp_size = eta * delta 
-        while True:
+        for pow_ind in range(maxiters):
             new_theta = (1.0 - stp_size) * theta_k + stp_size *  s_k
             obj_new = self.getObjective( new_theta )
             #print(obj_new, obj_k + gamma * DELTA)
@@ -401,7 +380,7 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self, stopping_eps=1.e-4, iterations=20, innerIterations=50, l2SquaredSolver='MBO'):
+    def run(self, stopping_eps=1.e-4, iterations=20, innerIterations=50, batch_size=None, l2SquaredSolver='MBO'):
         if self.p == -2 and l2SquaredSolver != 'MBO':
             logging.info('Solving ell2 norm squared via {}'.format(l2SquaredSolver) )
             return self.MSE(epochs=iterations)
@@ -423,12 +402,23 @@ class ModelBasedOptimzier:
         for k in range(1, iterations+1):
             #set the inner problem required accuracy
             eps = eps_init * eps_factor ** (k-1)
-
-            #run ADMM algortihm
-            model_improvement, admm_trace = self.runADMM( innerIterations, eps=eps )
             
-            #update optimization variable via Armijo rule and set model parameters
-            self.updateVariable( model_improvement ) 
+            #do batch iterations
+            if batch_size == None:
+                solver_indicies = [range( self.dataset_size )]
+            else:
+                intervals = list( np.arange(0, self.dataset_size, batch_size) )
+                if self.dataset_size - 1 not in intervals:
+                    intervals.append(self.dataset_size - 1 )
+                solver_indicies = [range(intervals(int_i), intervals(int_i + 1) ) for int_i in range(len(intervals) -1 )]
+               
+            for indicies in solver_indicies: 
+
+                #run ADMM algortihm
+                model_improvement, admm_trace = self.runADMM(ADMMsolvers=self.ADMMsolvers[indicies], iterations=innerIterations, eps=eps )
+            
+                #update optimization variable via Armijo rule and set model parameters
+                self.updateVariable( model_improvement ) 
 
             #log and keep track of stats
             OBJ = self.getObjective()
@@ -526,7 +516,7 @@ if __name__=="__main__":
  #   model.saveStateDict( args.outfile )
    
  #   theta, trace_SGD =  MBO.runSGD(args.inner_iterations, args.batch_size)
-    delta, trace_ADMM = MBO.runADMM(args.inner_iterations )
+    delta, trace_ADMM = MBO.runADMM(ADMMsolvers=MBO.ADMMsolvers[0:2], iterations=args.inner_iterations )
     
 
  #   with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:

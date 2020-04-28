@@ -75,16 +75,17 @@ if __name__=="__main__":
     W = torch.randn(args.m_prime, args.m)
     #project data_m_primeDim to a higher dimensional space via W
     data = torch.matmul(data_m_primeDim, W)
-    #add noise
-    noise_distr = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros( args.n * args.m), args.noiseLevel * torch.eye( args.n * args.m) )
-    data = data + noise_distr.sample().view(args.n, args.m)
 
-    
+    #add noise
+    #noise_distr = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros( args.n * args.m), args.noiseLevel * torch.eye( args.n * args.m) )
+    data = data + torch.randn(args.n, args.m) * args.noiseLevel
+
+     
 
     #add outliers
   
     #distribution of outliers values
-    outliers_distr = torch.distributions.multivariate_normal.MultivariateNormal(10.0 * torch.ones( args.n * args.m), args.noiseLevel * torch.eye( args.n * args.m) )
+   # outliers_distr = torch.distributions.multivariate_normal.MultivariateNormal(10.0 * torch.ones( args.n * args.m), args.noiseLevel * torch.eye( args.n * args.m) )
     #distribution of outliers indices
     outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones(args.n) * args.outliers)
     
@@ -92,8 +93,8 @@ if __name__=="__main__":
     outliers_ind = torch.nonzero( outliers>0)
     outliers = outliers.unsqueeze(1)
     #add outliers 
-    data = data + outliers * outliers_distr.sample().view(args.n, args.m)
-    
+    data = data + outliers * (torch.randn(args.n, args.m) * args.noiseLevel + 10.)
+
     print (torch.norm(data -  torch.matmul(data_m_primeDim, W), p=2) **2) 
 
     if args.problem_type == 'labeled':
