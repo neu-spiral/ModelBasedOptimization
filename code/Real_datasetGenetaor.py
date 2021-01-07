@@ -16,29 +16,19 @@ import math
 torch.manual_seed(1993)
 
 
-class unlabeledDataset(Dataset):
+
+class dropLabelDataset(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
+
     def __len__(self):
         return len(self.dataset)
+
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-        return self.dataset[idx, :]
+        return self.dataset[idx][0]
 
-
-class labeledDataset(Dataset):
-    def __init__(self, dataset):
-        self.dataset = dataset
-        dataset_x, dataset_y = dataset
-        self.dataset_x = dataset_x
-        self.dataset_y = dataset_y
-    def __len__(self):
-        return len(self.dataset_x)
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-        return self.dataset_x[idx, :],  self.dataset_y[idx, :]
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_name", type=str, default='MNIST', help="The name of the dataset to download")
@@ -54,7 +44,10 @@ if __name__=="__main__":
 
     #Download data
     my_dataset_class = eval('datasets.' + args.dataset_name)
-    my_dataset = my_dataset_class(args.data_dir, train=False, download=True, transform=my_transform)
+    my_dataset = dropLabelDataset( my_dataset_class(args.data_dir, train=False, download=True, transform=my_transform) )
+
+    
+
 
     if args.local_rank != None:
         torch.distributed.init_process_group(backend='gloo',

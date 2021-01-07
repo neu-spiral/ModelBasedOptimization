@@ -65,7 +65,7 @@ if __name__=="__main__":
     parser.add_argument("--m_prime", type=int, help='dimension of the embedding.')
     parser.add_argument("--noiseLevel", type=float, help='Covariance for the noise', default=1.e-3)
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
-    parser.add_argument("--outfile", type=str, help="Outfile")
+    parser.add_argument("--outfile_prefix", type=str, help="Outfile", default="data/synthetic/")
     parser.add_argument("--problem_type", choices=['labeled', 'unlabeled'], default='unlabeled')
     args = parser.parse_args()
 
@@ -99,18 +99,17 @@ if __name__=="__main__":
 
     if args.problem_type == 'labeled':
         data = data_m_primeDim, data
-    if args.outfile == None:
-        outfile = 'IN' + str(args.n) + 'by' + str(args.m) + '_' + 'lower' + str(args.m_prime) + 'noise' + str(args.noiseLevel) + 'outliers' + str(args.outliers)
-        if args.problem_type == 'labeled':
-            outfile += args.problem_type
-    else:
-        outfile = args.outfile
+
+    outfile = args.outfile_prefix + 'IN' + str(args.n) + 'by' + str(args.m) + '_' + 'lower' + str(args.m_prime) + 'noise' + str(args.noiseLevel) + 'outliers' + str(args.outliers)
+    if args.problem_type == 'labeled':
+        outfile += args.problem_type
     #create a Dataset object 
     if args.problem_type == 'unlabeled':
         dataset = unlabeledDataset( data )
     else:
         dataset = labeledDataset( data )
    # torch.save(data, outfile)
+
     dumpFile(outfile, dataset) 
     torch.save(outliers_ind, outfile + 'outliers')
   

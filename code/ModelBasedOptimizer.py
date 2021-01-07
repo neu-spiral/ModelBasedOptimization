@@ -1,18 +1,20 @@
 import argparse
 import time
+import numpy as np
 import pickle
 from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from Net import AEC, DAEC, Linear
+from Net import AEC, DAEC, Linear, ConvAEC
 from torch.utils.data import Dataset, DataLoader
-from ADMM import LocalSolver, solveConvex, solveWoodbury
+from ADMM import LocalSolver, solveConvex, solveWoodbury, solveQuadratic, OADM, InnerADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
 from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
 import torch.optim as optim
 from datasetGenetaor import labeledDataset, unlabeledDataset
+from Real_datasetGenetaor import dropLabelDataset
 
 
 #torch.manual_seed(1993)
@@ -100,11 +102,12 @@ class ModelBasedOptimzier:
         """
 
         #Instantiate (global) convex solvers
-        globalSolver = solveWoodbury(model, self.rank)
+        globalSolver = solveQuadratic(model, self.rank)
        
         #Initialize solver variables
         for ADMMsolver in ADMMsolvers:
-            ADMMsolver.setVARS(primalTheta = globalSolver.primalTheta, Theta_k = globalSolver.Theta_k)
+            print("setting up")
+            ADMMsolver.setVARS(primalTheta = globalSolver.primalTheta, Theta_k = globalSolver.Theta_k, quadratic = True)
         
         t_start = time.time()
         #trace to keep trak of progress
@@ -118,7 +121,7 @@ class ModelBasedOptimzier:
 
             #Update Y and adapt duals for each solver 
             last = time.time()
-            for ADMMsolver in ADMMsolvers:
+            for solver_ind, ADMMsolver in enumerate(ADMMsolvers):
 
                 #Eval objective for each term (solver)
                 OBJ_TOT += ADMMsolver.getObjective()
@@ -128,6 +131,8 @@ class ModelBasedOptimzier:
 
                 PRES_TOT += PRES ** 2
                 DRES_TOT += DRES ** 2
+
+                print(solver_ind)
 
             now = time.time()
             logger.debug('Updated primal Y variables in {}(s)'.format(now - last) )
@@ -186,7 +191,7 @@ class ModelBasedOptimzier:
         logger.info("Inner ADMM done in {0} iterations, took  {1:.2f}(s), final objective is {2:.4f}".format(k, time.time() - t_start, OBJ_TOT ))
         logger.info("PRES is {1:.4f}, DRES is {2:.4f}".format(k, PRES_TOT, DRES_TOT) )
                         
-        return delta_TOT, trace
+        return globalSolver.primalTheta, delta_TOT, trace
 
     def MSE(self, epochs=1, batch_size=8):
         """
@@ -356,7 +361,7 @@ class ModelBasedOptimzier:
 
 
     @torch.no_grad()
-    def updateVariable(self, DELTA, maxiters=100):
+    def updateVariable(self, s_k, DELTA, maxiters=100):
 
         last = time.time()
         delta =0.85
@@ -364,16 +369,29 @@ class ModelBasedOptimzier:
         eta = 1.0
 
         obj_k = self.getObjective()
-        theta_k = self.ADMMsolvers[0].Theta_k
-        s_k = self.ADMMsolvers[0].primalTheta
+   
+        #mult by 1 to make sure that theta_k is not pointing to the paramaters of the model (o.w. modifying model parameters, would modify theta_k too!)
+        theta_k = self.model.getParameters() * 1
+
+       # s_k = self.ADMMsolvers[0].primalTheta
+
+        #initial step-size
         stp_size = eta * delta 
         for pow_ind in range(maxiters):
+            #new point a convex comb. of theta_k and new point (s_k)
             new_theta = (1.0 - stp_size) * theta_k + stp_size *  s_k
+
+            #eval objective for new_theta
             obj_new = self.getObjective( new_theta )
             #print(obj_new, obj_k + gamma * DELTA)
+ 
+            #check if objective for new_theta is within the desired boundaries r
             if obj_new <= obj_k + gamma * DELTA:
                 break 
+          
+            #shrink step-size
             stp_size *= delta
+
         now = time.time()
         logger.debug('New step-size found and parameter updated in {0:.2f}(s).'.format(now - last) )
         return obj_new             
@@ -386,6 +404,16 @@ class ModelBasedOptimzier:
         if self.p == -2 and l2SquaredSolver != 'MBO':
             logging.info('Solving ell2 norm squared via {}'.format(l2SquaredSolver) )
             return self.MSE(epochs=iterations)
+
+
+        #setup batchs
+        if batch_size == None:
+            solver_indicies = [range( self.dataset_size )]
+        else:
+            intervals = list( np.arange(0, self.dataset_size, batch_size) )
+            if self.dataset_size - 1 not in intervals:
+                intervals.append(self.dataset_size - 1 )
+            solver_indicies = [range(intervals[int_i], intervals[int_i + 1] ) for int_i in range(len(intervals) -1 )]
 
 
         #Accuracy for inner problem 
@@ -401,26 +429,41 @@ class ModelBasedOptimzier:
         trace[0]['time'] = time.time() - t_start 
         trace[0]['DELTA'] = 0.0
         logger.info('Outer iteration 0, OBJ is {0:.4f}'.format(trace[0]['OBJ'] ) )
+
+        #main loop
         for k in range(1, iterations+1):
-            #set the inner problem required accuracy
+            #set the required accuracy for ADMM 
             eps = eps_init * eps_factor ** (k-1)
-            
-            #do batch iterations
-            if batch_size == None:
-                solver_indicies = [range( self.dataset_size )]
-            else:
-                intervals = list( np.arange(0, self.dataset_size, batch_size) )
-                if self.dataset_size - 1 not in intervals:
-                    intervals.append(self.dataset_size - 1 )
-                solver_indicies = [range(intervals(int_i), intervals(int_i + 1) ) for int_i in range(len(intervals) -1 )]
-               
-            for indicies in solver_indicies: 
+
+            #initialize model improvment 
+            model_improvement_TOT = 0.0
+
+            #time 
+            t_start = time.time()
+
+           
+
+            #run ADMM for batches
+            for interval_index, indicies in enumerate(solver_indicies): 
+
 
                 #run ADMM algortihm
-                model_improvement, admm_trace = self.runADMM(ADMMsolvers=self.ADMMsolvers[indicies], iterations=innerIterations, eps=eps )
+                newTheta, model_improvement, admm_trace = self.runADMM(ADMMsolvers=self.ADMMsolvers[indicies[0]: indicies[-1]], iterations=innerIterations, eps=eps )
+
+                #increment/initialize newTheta
+                if interval_index == 0:
+                    newTheta_AVG = newTheta / self.dataset_size
+                else:
+                    newTheta_AVG += newTheta / self.dataset_size
+
+                #increment model improvement
+                model_improvement_TOT += model_improvement
             
-                #update optimization variable via Armijo rule and set model parameters
-                self.updateVariable( model_improvement ) 
+                #log info
+                logger.info('Batch number {0}, time spent in this iteration is {1:.1f}, model improvement {2:.4f}'.format(interval_index, time.time() - t_start,  model_improvement_TOT) )
+
+            #update optimization variable via Armijo rule and set model parameters
+            self.updateVariable(s_k=newTheta_AVG, DELTA=model_improvement_TOT )
 
             #log and keep track of stats
             OBJ = self.getObjective()
@@ -448,12 +491,12 @@ class ModelBasedOptimzier:
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("input_file", type=str)
     parser.add_argument("--local_rank", type=int)
-    parser.add_argument("--input_file", type=str)
-    parser.add_argument("--m_dim", type=int, default=10)
+    parser.add_argument("--m_dim", type=int, default=1)
     parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
-    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=None, help="batch size for processing dataset, when None it is set equal to the dataset size.")
     parser.add_argument("--inner_iterations", type=int,  default=40)
     parser.add_argument("--iterations", type=int,  default=50)
     parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
@@ -461,7 +504,7 @@ if __name__=="__main__":
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
     parser.add_argument("--outfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
-    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC'], default='AEC')
+    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC'], default='ConvAEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
     args = parser.parse_args()
 
@@ -496,29 +539,44 @@ if __name__=="__main__":
     #initialize model
     new_model = eval(args.net_model)
     model = new_model(args.m_dim, args.m_prime, device=device)
+
     #model = Linear(args.m, args.m_prime)
+
     model = model.to(device)
 
     #load dataset 
    # dataset =  torch.load(args.input_file)
     dataset = loadFile(args.input_file)
+
  
     #estimate g function
     if args.p not in [1, 2, -2]:
         g_est = estimate_gFunction(args.p)
     else:
         g_est = None
+
+
+    #OADM
+    oadm_solver = OADM(dataset, rho=5.0, p=2, h=1.0, gamma=1.0, regularizerCoeff = 0.5, batch_size = 4, model = model, theta_k = model.getParameters() )
+    A, sqA_sum, b, c, Blambda, init_sol = oadm_solver._getInnerADMMCoefficients()
+
+    IADMM = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = Blambda, p = args.p, model = model, init_solution = init_sol, rho_inner  = 0.4)
+
+    IADMM.run(iterations = 1000)
+
+    
+
   
     #initialize a model based solver
-    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
- #   trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, l2SquaredSolver=args.l2SquaredSolver)
+#    MBO = ModelBasedOptimzier(dataset=dataset, model=model, rank=args.local_rank, rho=args.rho, p=args.p, g_est=g_est)
+    #trace =  MBO.run(iterations = args.iterations, innerIterations=args.inner_iterations, batch_size=args.batch_size, l2SquaredSolver=args.l2SquaredSolver)
  #   dumpFile(args.tracefile, trace)
 
     #save model parameters
  #   model.saveStateDict( args.outfile )
    
  #   theta, trace_SGD =  MBO.runSGD(args.inner_iterations, args.batch_size)
-    delta, trace_ADMM = MBO.runADMM(ADMMsolvers=MBO.ADMMsolvers[0:1], iterations=args.inner_iterations )
+ #   delta, trace_ADMM = MBO.runADMM(ADMMsolvers=MBO.ADMMsolvers, iterations=args.inner_iterations )
     
 
  #   with open(args.tracefile + "_sgd{}".format(args.batch_size),'wb') as f:

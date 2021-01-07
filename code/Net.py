@@ -48,6 +48,12 @@ class TensorList(list):
            for ind, tensor in enumerate(self):
                out.append( tensor * other  )
            return TensorList(out)
+
+    def __truediv__(self, other):
+        assert type(other) in [float, int], 'Type is not valid'
+ 
+        other = 1./other
+        return self.__mul__(other)
   
     def __rmul__(self, other):
         if type(other) in [float, int]:
@@ -58,6 +64,27 @@ class TensorList(list):
         for tensor in self:
             out.append(tensor ** other)
         return TensorList(out)
+
+    def outProd(self, other=None):
+        """
+            Given another TensorList, compute the outer prodcut between them. Here each of the TensorLists is trated as a long 1-d tensor (vector). Then outer-product 
+            of these vectors is returned. 
+            If other is None, return ouuterproduct of the TensorList with itself.
+        """
+
+        if other is  not None:
+            assert self.size() == other.size(), "TensorLists must be of the same size"
+
+        vec_TL = self.getTensor()
+     
+        if other is None:
+            return torch.ger(vec_TL, vec_TL)
+
+        else:
+            other_vec_TL = other.self.getTensor()
+            return torch.ger(vec_TL, other_vec_TL)
+
+        
 
     def getTensor(self):
         "Return a tneosr that is the vectorization and concatenation of th tensors in the TensorList."
@@ -71,6 +98,35 @@ class TensorList(list):
         for tensor in self:
             out += torch.norm(tensor, p=2) ** 2
         return out     
+
+    def TLShape(self):
+        """
+          Return the shapes for tensors in TensorList.
+        """
+        return [tensor.shape for tensor in self]
+
+    @staticmethod
+    def formFromTensor(tensor, TL_shape):
+        """
+         Given a Tensor and a list of shapes, convert tensor into a TensorList.
+        """
+
+        tensor = tensor.view(-1)
+
+        st_ind = 0
+
+        newL = []
+
+        for shape_i in TL_shape:
+            newL.append(  torch.reshape(tensor[st_ind: st_ind + np.prod(shape_i)], shape_i ) )
+
+            st_ind  += np.prod(shape_i)
+
+        return TensorList( newL ) 
+
+         
+            
+
 
     def size(self):
         TL_size = 0
@@ -189,17 +245,26 @@ class Network(nn.Module):
 
         bath_size, output_size = output.size()
         if bath_size != 1:
-             raise Exception('Batch dimension is not equal to one.')
+            raise Exception('Batch dimension is not equal to one.')
 
         Jacobian = ()
+
         for i in range(output_size):
             Jacobian_i_row = self._getJacobian_aux(output=output, i=i)
+
+
+            #compute the outer-product of Jacobian with itself transpose 
             if quadratic:
-                SquaredJacobian = torch.ger(Jacobian_i_row.squeeze(0), Jacobian_i_row.squeeze(0))
+                if i == 0:
+                    SquaredJacobian = Jacobian_i_row.outProd()
+                else:
+                    SquaredJacobian += Jacobian_i_row.outProd()
 
             Jacobian += (Jacobian_i_row,)
+
         if not quadratic:
             return Jacobian
+
         return Jacobian, SquaredJacobian
     
                     
@@ -251,6 +316,7 @@ class Network(nn.Module):
 
         #right multiplication 
         assert type(vec) == TensorList, "pass a TensorList as vec"        
+
         out = []
         for Jacobian_i in Jacobian:
             out.append( Jacobian_i * vec )
@@ -305,13 +371,21 @@ class AEC(Network):
         self.m_prime = m_prime
         self.fc1 = nn.Linear(m, m_prime) 
         self.fc2 = nn.Linear(m_prime, m) 
+
     def forward(self, X):
         "Given an input X execute a forward pass."
         if type(X) == list:
             X = X[0]
+
+        #flatten input
         X = X.view(X.size(0), -1)
+
+        #apply the linear encoder followed by activation function 
         Y = torch.sigmoid( self.fc1(X) )
+
+        #apply linear decoder 
         Y = self.fc2(Y)
+
         return Y - X 
 
 
@@ -330,6 +404,7 @@ class DAEC(Network):
             self.noise_distr = torch.distributions.multivariate_normal.MultivariateNormal( torch.zeros(self.m), noise_level * torch.eye(self.m) )
         elif noise == 'Bernoulli':
             self.noise_distr = torch.distributions.bernoulli.Bernoulli( (1.0 - noise_level) * torch.ones(self.m)   )
+
     def forward(self, X):
         "Given an input X execute a forward pass."
        
@@ -357,12 +432,38 @@ class Embed(Network):
         return self.embedding( X )
         
 
-       
-        
+class ConvAEC(Network):
+    def __init__(self, k_in, k_h, kernel_x = 3, kernel_y = 3, padding=0, strides = 1, device=torch.device("cpu")):        
+        super(ConvAEC, self).__init__(device)
+ 
+        self.k_in = k_in
+        self.k_h = k_h
+        self.conv_lyr = torch.nn.Conv2d(k_in, 
+                                        k_h,
+                                        (kernel_x, kernel_y),
+                                        stride = strides,
+                                        padding = padding
+                                       )
+
+        self.deconv_lyr = torch.nn.ConvTranspose2d(k_h,
+                                        k_in,
+                                        (kernel_x, kernel_y),
+                                        stride = strides,
+                                        padding = padding
+                                       )
+
+    def forward(self, X):
+        H = self.conv_lyr( X )
+        #H = torch.nn.ReLU( H )
      
-    
+        Y = self.deconv_lyr(H)
+
+        #Y = torch.nn.ReLU( Y )
+        return torch.flatten(Y, start_dim = 1) - torch.flatten(X, start_dim = 1)
         
-    
+
+
+
  
         
 
@@ -370,21 +471,33 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str)
     args = parser.parse_args() 
-    model  = AEC(4, 2)
+    model  = ConvAEC(1, 8)
 
-    parm = model.getParameters()
-    x = torch.randn(1,4)
+
+
+    x = torch.randn(1, 1, 10, 5)
+
+    out = model(x)
+
+
+    Jac, sqJac = model.getJacobian(out, quadratic = True)
+
+    Jac_old = model.getJacobian_old(out, quadratic = False)
+
+    print( torch.matmul(torch.transpose(Jac_old, 0, 1), Jac_old)  - sqJac)
+ #   print(sqJac.shape)
+
+    #print("Jacobian is", torch.tensor([tl.getTensor() for tl in Jac]) )
+
+    #print("old Jacobian is", Jac_old)
+
+    #print("Suqared Jac is ", sqJac)
+
+
+     
+
     
 
-    out = model(x)
-    Jac = model.getJacobian(out)
-    print(model.vecMult(vec=parm, Jacobian=Jac))
-
-    out = model(x)
-    Jac_mat = model.getJacobian_old(out)
-    parm_tens = parm.getTensor()
-    print(torch.matmul(Jac_mat, parm_tens))
-   # dataset = loadFile( args.input_file )
    # ds_loader = DataLoader(dataset, batch_size=1)
     #model.getJacobian(output)
    #print('took {}'.format(time.time() - tS))

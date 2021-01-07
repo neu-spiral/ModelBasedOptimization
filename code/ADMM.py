@@ -3,7 +3,7 @@ import time
 import logging
 import numpy as np
 import logging
-from Net import AEC, DAEC, Embed
+from Net import AEC, DAEC, Embed, TensorList
 from torch.utils.data import Dataset, DataLoader
 import torch
 from helpers import pNormProxOp, clearFile, estimate_gFunction, loadFile, _testOpt
@@ -11,6 +11,258 @@ from  datasetGenetaor import unlabeledDataset
 import torch.nn as nn
 
 #torch.manual_seed(1993)
+
+@torch.no_grad()
+class InnerADMM():
+    def __init__(self, A, sqA, b, c, coeff, p, model, init_solution = None, rho_inner = 1.0):
+        """
+            A class that implements ADMM for generic problems of the form:
+
+                Minimize ∑_i ||A_ix + b_i||_p + coeff * ||x - c||_2^2.
+            Args:
+                A: a list of matrices A_i, where each element (A_i) is a TensorList
+                sqA: the sum of squared A_i matrices, a d by d Tensor
+                b: a list of vectors b_i, where each element (b_i) is a Tensor.
+                c: a TensorList
+
+                p: a float number, showing the p-norm.
+                coeff: a positive float number
+                model: neural network model
+
+                init_solution (optional): initial solution given as a TensorList
+                rho_inner (optional): a psoitive float number that shows the rho parameters in ADMM
+        """
+
+        self.A = A
+        self.sqA = sqA
+        self.b = b
+        self.c = c
+        self.coeff = coeff
+
+        self.model = model
+
+        self.rho_inner = rho_inner
+        self.p = p
+
+        #set primal and dual variables
+        if init_solution is None:
+            self.x = self.c * 0.0
+        else:
+            self.x = init_solution
+
+        #estimate g function
+        if self.p not in [1, 2, -2]:
+            self.g_est = estimate_gFunction(self.p)
+        else:
+            self.g_est = None
+    
+        self.y = []
+        self.z = []
+
+        for ind, A_i in enumerate(self.A):
+
+            y_i = model.vecMult(self.x, Jacobian = A_i) + self.b[ ind ]
+
+            self.y.append( y_i )
+
+            z_i = y_i * 0.0
+    
+            self.z.append( z_i )
+    
+    @torch.no_grad()
+    def run(self, iterations = 100, eps = 1.e-3):
+
+        #compute the second order term in computing x 
+        seqcon_ord_term = 2 * self.coeff * torch.eye( self.sqA.shape[0] )  + self.rho_inner * self.sqA 
+
+        #compute the inverse of the second order term
+        seqcon_ord_term_inv = torch.inverse( seqcon_ord_term )
+        
+    
+        for k in range(iterations):
+            
+
+            for ind, A_i in enumerate(self.A):
+                #compute the affine function
+                Ax_plus_b_i = self.model.vecMult(self.x, Jacobian = A_i) + self.b[ ind ]
+
+
+
+                self.z[ind] = self.z[ind] + self.y[ ind ] - Ax_plus_b_i
+
+                
+                #old y
+                old_y_i = self.y[ ind ]
+
+      
+                #update y via prox. operator for p-norms                   
+                self.y[ ind ] = pNormProxOp( Ax_plus_b_i - self.z[ ind ], self.rho_inner, g_est = self.g_est, p = self.p) 
+
+                #sum up first order terms
+                if ind == 0:
+
+                    
+                    PRES = torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
+
+                    DRES = torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
+
+                    OBJ = torch.norm(self.y[ ind ], p = self.p)
+
+                    first_ord_term = self.model.vecMult( self.b[ ind ] - self.z[ ind ] - self.y[ ind ], Jacobian = A_i, left = True )
+
+                else:
+                    PRES += torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
+
+                    DRES += torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
+
+                    OBJ += torch.norm(self.y[ ind ], p = self.p)
+
+                    first_ord_term += self.model.vecMult( self.b[ ind ] - self.z[ ind ] - self.y[ ind ], Jacobian = A_i, left = True )
+
+            #update x 
+            first_ord_tot =  - self.rho_inner * first_ord_term + 2 * self.coeff * self.c
+
+            first_ord_tot = first_ord_tot.getTensor()
+
+            self.x = torch.matmul(seqcon_ord_term_inv, first_ord_tot )
+
+            self.x = TensorList.formFromTensor(self.x, self.c.TLShape() )
+
+            OBJ += self.coeff * (self.x - self.c).frobeniusNormSq()
+
+            print("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
+
+        return self.x
+                 
+ 
+                
+
+                                 
+            
+
+
+
+class OADM():
+    def __init__(self, data, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, batch_size = 8, model=None, theta_k=None):
+        """
+             A class that implements OADM algrotithm:
+
+             Args:
+                 data: dataset
+                 rho: rho parameter for used in OADM algrotihm
+                 gamma: coefficient for squared term used in OADM
+                 h: coefficient for the quadratic term around the current solution
+                 regularizerCoeff: coefficient for regularization
+                 model: torch model 
+                 p: p-norm to use
+                 theta_k: current parameters of model
+        """
+
+        self.data = data
+        self.rho = rho
+        self.p = p
+        self.h = h
+        self.gamma = gamma
+        self.batch_size = batch_size
+        self.regularizerCoeff = regularizerCoeff
+        self.model = model
+
+        self.theta_k = theta_k
+       
+
+        self.data_loader = DataLoader(data, batch_size = batch_size)
+         
+        #initialize primal and dual variables
+        self.theta1 = self.model.getParameters() * 0
+        self.theta2 = self.model.getParameters() * 0
+        self.dual =  self.model.getParameters() * 0
+
+
+
+    def _getInnerADMMCoefficients(self, quadratic = True):
+        """
+            Compute the matrices and vectors for the problem to be solved via ADMM, i.e., 
+            Minimize 1/B ∑_i ||A_ix + b_i||_p + \lambda ||x - c||_2^2
+        """
+
+        data_batch = next( iter(self.data_loader) )        
+
+        b = []
+        A = []
+       
+        for ind, data_i in enumerate(data_batch):
+            data_i = torch.unsqueeze(data_i, 0)
+
+            F_i = self.model( data_i)
+
+            D_i, sqD_i = self.model.getJacobian(F_i, quadratic = quadratic)
+
+            with torch.no_grad():
+                b.append(  F_i - self.model.vecMult(vec = self.theta_k, Jacobian = D_i ) )
+                
+                A.append( D_i )
+
+                if ind == 0:
+                    sqA_sum = sqD_i
+                else:
+                    sqA_sum += sqD_i
+
+                
+
+        with torch.no_grad():
+            #compute current model function
+            current_model_func = 0.0
+
+            for ind, b_i in enumerate(b):
+                current_model_func += b_i + self.model.vecMult(vec = self.theta1, Jacobian = A[ ind ] )        
+
+            c = 2 * self.rho / (self.rho + self.gamma + self.h) * (self.theta2 - self.dual) + \
+                2 * self.gamma / (self.rho + self.gamma + self.h)  * self.theta1 + \
+                2 * self.h / (self.rho + self.gamma + self.h) * self.theta_k
+            
+            Blambda = self.batch_size * (self.rho + self.gamma + self.h) / 2
+
+
+        return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0, current_model_func / self.batch_size
+
+    def updtateTheta2(self):
+        """
+           Update theta2 via solving:
+                Minimize G(theta2) + ρ||theta1^t + dual^t - theta2||_2^2,
+           
+           where in this base class we set G(θ) = regularizerCoeff * ||θ||_2^2.
+        """
+
+        return self.rho / (self.rho + self.regularizerCoeff) * (self.theta1 + self.dual)
+
+    @torch.no_grad()
+    def run(self, iterations = 100, eps = 1.e-3, inner_iterations = 100, inner_eps = 1e-3):
+        """
+            Run the iterations of the OADM algrotihm.
+        """ 
+
+
+        for k in range(iterations):
+            #get terms for running Inner ADMM 
+            A, sqA_sum, b, c, Blambda, coeff, init_sol, current_model_func = self._getInnerADMMCoefficients()
+
+            #adapt dual variables
+            self.dual += self.theta1 - self.theta2
+
+            #inner admm initialization 
+            InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = 1.0)
+
+            #update theta1 via InnerADMM
+            self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
+
+            #update theta2
+            self.theta2 = self.updtateTheta2()
+
+           
+
+            
+             
+
 
 class LocalSolver():
     "LocalSolver for executing steps of ADMM."
@@ -111,7 +363,7 @@ class LocalSolver():
 
 
     @torch.no_grad()   
-    def getCoeefficients(self, qudratic=False):
+    def getCoeefficients(self, quadratic=False):
         """
             Return the coefficientes for the first order and the second order terms for updating primalTheta
         """ 
@@ -121,7 +373,7 @@ class LocalSolver():
         first_ord = self.rho * self.model.vecMult(vec=U_hat, Jacobian=self.Jac, left=True) 
  
 
-        if qudratic:
+        if quadratic:
             second_ord = self.rho * self.squaredJac 
             return first_ord, second_ord
 
@@ -148,31 +400,6 @@ class LocalSolver():
         return self.rho/2. * MSELoss
         
 
-
-
-    @torch.no_grad()
-    #NOTE: deprecated! 
-    def updateTheta(self, first_ord=None, second_ord=None, newTheta=None):
-        """
-            Update theta by solving the convex problem
-        """
-        oldPrimalTheta = self.primalTheta        
-        if newTheta is not None:
-            self.primalTheta = newTheta
-            return (oldPrimalTheta - self.primalTheta).frobeniusNormSq() ** 0.5
-
-        b = first_ord + self.squaredConst * self.Theta_k
-
-        scaledI = self.squaredConst * torch.eye( self.dim_d ).unsqueeze(0)
-        if self.use_cuda:
-            scaledI = scaledI.cuda()
-
-        A = second_ord.unsqueeze(0) + scaledI
-
-        #Solve the convex problem  
-        self.primalTheta = self.convexSolver.solve(A=A, b=b)
-       # print ( torch.matmul(A, self.primalTheta.T) - b.T )
-        return torch.norm(oldPrimalTheta - self.primalTheta, p=2)
 
 
 
@@ -220,7 +447,82 @@ class GlobalSolvers:
         #primal variable Theta (note that mult. by 1 makes sure that primalTheta and Theta_k are not pointers to the same tensor)      
         self.primalTheta = self.model.getParameters() * 1
         
-       
+    def _getVec(self, ADMMsolvers, quadratic=False):
+        """
+            Return first and second order terms for updating Theta, which is a quadratic problem:
+
+            first_ord = rho \Sum_i D_i hat{u}_i + squaredConst * Theta_k
+            second_ord = rho \Sum_i D_i D_i^T + (squaredConst + regularizationCoeff) * I
+        """
+
+        for solver_ind, ADMMsolver in enumerate(ADMMsolvers):
+            if quadratic:
+                first_ord, second_ord = ADMMsolver.getCoeefficients(quadratic = quadratic)
+            else:
+                first_ord =  ADMMsolver.getCoeefficients(quadratic = quadratic)
+
+
+            if solver_ind == 0:
+                first_ord_TOT = first_ord
+
+                if quadratic:
+                    second_ord_TOT = second_ord
+            else:
+                first_ord_TOT  += first_ord
+
+                if quadratic:
+                    second_ord_TOT += second_ord
+
+            if self.rank != None:
+                torch.distributed.all_reduce(first_ord_TOT)
+
+                if quadratic:
+                    torch.distributed.all_reduce(second_ord_TOT)
+
+        first_ord_TOT += ADMMsolvers[0].squaredConst * self.Theta_k
+
+
+        if quadratic:
+            second_ord_TOT += (ADMMsolvers[0].squaredConst + ADMMsolvers[0].regularizerCoeff) * torch.eye( second_ord.size()[1]  )    
+
+            return first_ord_TOT, second_ord_TOT
+              
+        return first_ord_TOT
+
+    def solve(self, ADMMsolvers):
+        """
+            Return the optimal Theta by solving the qudartic programming problem. Given are the LocalSolvers (ADMMSolver), which determine the first and second order terms in the problem. 
+        """
+        pass
+
+    def updateTheta(self, ADMMsolvers):
+        #compute new Theta
+        newTheta = self.solve(ADMMsolvers)
+
+        #check optimilaity
+        print("Optimilaity is ", self.debug(newTheta, ADMMsolvers) )
+
+
+        #compute dual residual 
+        DRES = (newTheta - self.primalTheta).frobeniusNormSq() ** 0.5
+
+
+
+        #update Theta 
+        for var_ind, var in enumerate( newTheta ):
+            self.primalTheta[var_ind].copy_( var.data )
+        return DRES
+
+    def debug(self, sol, ADMMsolvers):
+       """
+           Check the optimilaity of the solution.
+       """
+
+       first_ord, second_ord = self._getVec(ADMMsolvers, quadratic = True)
+
+       sol_tensor = sol.getTensor()
+
+       return torch.matmul(second_ord, sol_tensor)  - first_ord.getTensor()
 
 class solveConvex(GlobalSolvers):
     """
@@ -294,7 +596,7 @@ class solveConvex(GlobalSolvers):
    # @torch.no_grad()
     def updateTheta(self, ADMMsolvers):
         """
-            Update theta by in all local solver instances.
+            Update theta by in all local solver instances. 
         """
 
         #update theta by solving the quadratic convex problem via gradient descent
@@ -333,23 +635,6 @@ class solveWoodbury(GlobalSolvers):
  
 
 
-    def _getVec(self, ADMMsolvers):
-
-        for solver_ind, ADMMsolver in enumerate(ADMMsolvers):
-            first_ord =  ADMMsolver.getCoeefficients()
-
-            if solver_ind == 0:
-                first_ord_TOT = first_ord
-            else:
-                first_ord_TOT  += first_ord
-
-            if self.rank != None:
-                torch.distributed.all_reduce(first_ord_TOT)
-
-
-        first_ord_TOT += ADMMsolvers[0].squaredConst * self.Theta_k
-
-        return first_ord_TOT
 
     def _debug(self, ADMMsolvers, b):
         MAT = []
@@ -419,7 +704,7 @@ class solveWoodbury(GlobalSolvers):
         sol = ADMMsolvers[0].squaredConst * b - ADMMsolvers[0].rho * D_matInv_D_transpose_b 
 
         #test solution
-        self.testSolution(ADMMsolvers, b, sol)
+        #self.testSolution(ADMMsolvers, b, sol)
      
         return sol 
 
@@ -452,53 +737,30 @@ class solveWoodbury(GlobalSolvers):
                 
 
 class solveQuadratic(GlobalSolvers):
-    def __init__(self, model, rank=None, quadCoeff=0.0):
-        """
-           Solve the following convex problem:
-                 Minimize: quadCoeff * ||theta||_2^2 + 0.5 * theta^T * A * theta  - squaredConst *  <theta, b>
-                 Subj. to:  theta \in Reals,
-        """
-        super(solveQuadratic, self).__init__(model, rank)
-        self.quadCoeff = quadCoeff 
-
-
-    @torch.no_grad()
-    def _getVec(self, ADMMsolvers, quadratic=False):
-        first_ord_TOT = 0.
-
-        for ADMMsolver in ADMMsolvers:
-            first_ord =  ADMMsolver.getCoeefficients(quadratic)        
-
-            #add first order and second order coeffocients
-            first_ord_TOT  += first_ord
-
-            if self.rank != None:
-                torch.distributed.all_reduce(first_ord_TOT)
-
-
-        first_ord_TOT += ADMMsolvers[0].squaredConst * self.Theta_k  
-
 
     @torch.no_grad()
     def solve(self, ADMMsolvers):
-        b = self._getVec(ADMMsolvers)
 
-        #Qudartic term due to the norm2 squared regularizer        
-        A_regulrizer = self.quadCoeff * torch.eye( A.size()[1]  )
-        if torch.cuda.is_available():
-            A_regulrizer = A_regulrizer.cuda()
+        try:
+            self.Ainv
+            first_trem =  self._getVec(ADMMsolvers)
 
-        A += A_regulrizer
-        b = b.T.unsqueeze(0)
-        sol, LUdecomp = torch.solve(b, A)
+        except AttributeError:
+            first_trem, second_term =  self._getVec(ADMMsolvers, quadratic=True)
+
+            self.Ainv = torch.inverse( second_term )
+ 
+        #convert the TensorList to Tensor to matrix-vector product
+        first_trem_tensor = first_trem.getTensor()
+
+        sol_tensor = torch.matmul(self.Ainv, first_trem_tensor)
+
+        return first_trem.formFromTensor( sol_tensor, first_trem.TLShape() )
+
+
+       
         
-        #test
-       # A = A.squeeze(0)
-       # b = b.squeeze(0)
-       # sol = sol.squeeze(0)
-        #print (torch.matmul(A, sol) - b)
-  
-        return sol.squeeze(2)
+
         
          
 
