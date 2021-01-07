@@ -4,6 +4,7 @@ from helpers import loadFile
 import logging
 from torch.multiprocessing import Process
 import os
+import random
 import torch.distributed as dist
 import numpy as np
 import torch.nn as nn
@@ -417,19 +418,42 @@ class DAEC(Network):
         Y = self.fc2(Y)
         return Y - X
 
-class Embed(Network):
+class MF(Network):
     """
-        A class for Non-negative Matrix Factorization; the input size is m and the encoded size is m_prime.
+        A class for Non-negative Matrix Factorization; the input size is m and the encoded size is k.
     """
-    def __init__(self, m , m_prime, device=torch.device("cpu")):
-        super(Embed, self).__init__(device)
+    def __init__(self, m , m_prime, k,  device=torch.device("cpu")):
+        super(MF, self).__init__(device)
+
         #Dictionary size
         self.m = m
-        #Embedding size
+
+        #Original size
         self.m_prime = m_prime
-        self.embedding = nn.Embedding(self.m, self.m_prime)
-    def forward(self, X):
-        return self.embedding( X )
+
+        #Embedding size
+        self.k = k
+
+        self.embedding = nn.Embedding(self.m, self.k)
+
+        self.embeddingCol = nn.Embedding(self.m_prime, self.k)
+
+
+        #compute all columns embedding
+        self.col_embedding = self.embeddingCol( torch.tensor( range(self.m_prime) ) )
+        
+
+    def forward(self, data):
+        matrix, ind = data
+
+        #embeddings for given rows
+        emb_rows = self.embedding( ind )
+
+
+        reconstructed_matrix = torch.matmul(emb_rows, torch.transpose(self.col_embedding, 0, 1) )
+        
+
+        return reconstructed_matrix - matrix
         
 
 class ConvAEC(Network):
@@ -466,37 +490,30 @@ class ConvAEC(Network):
 
  
         
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str)
     args = parser.parse_args() 
-    model  = ConvAEC(1, 8)
+
+    #10 rows, 6 cols, embed size 3
+    model  = MF(100, 6, 3)
+
+    matrix = torch.randn(100, 6)
+
+    ind = torch.randint(low = 0, high = 99, size = (1,))
 
 
+    mat_ind = matrix[ ind ]
 
-    x = torch.randn(1, 1, 10, 5)
+    data = (mat_ind, ind)
 
-    out = model(x)
+    out = model( data ) 
 
+    jac = model.getJacobian(out)
 
-    Jac, sqJac = model.getJacobian(out, quadratic = True)
-
-    Jac_old = model.getJacobian_old(out, quadratic = False)
-
-    print( torch.matmul(torch.transpose(Jac_old, 0, 1), Jac_old)  - sqJac)
- #   print(sqJac.shape)
-
-    #print("Jacobian is", torch.tensor([tl.getTensor() for tl in Jac]) )
-
-    #print("old Jacobian is", Jac_old)
-
-    #print("Suqared Jac is ", sqJac)
-
-
-     
-
-    
+    print(jac)
 
    # ds_loader = DataLoader(dataset, batch_size=1)
     #model.getJacobian(output)

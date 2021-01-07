@@ -558,11 +558,9 @@ if __name__=="__main__":
 
     #OADM
     oadm_solver = OADM(dataset, rho=5.0, p=2, h=1.0, gamma=1.0, regularizerCoeff = 0.5, batch_size = 4, model = model, theta_k = model.getParameters() )
-    A, sqA_sum, b, c, Blambda, init_sol = oadm_solver._getInnerADMMCoefficients()
 
-    IADMM = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = Blambda, p = args.p, model = model, init_solution = init_sol, rho_inner  = 0.4)
+    oadm_solver.run(iterations=20)
 
-    IADMM.run(iterations = 1000)
 
     
 

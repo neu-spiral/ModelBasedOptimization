@@ -70,7 +70,7 @@ class InnerADMM():
             self.z.append( z_i )
     
     @torch.no_grad()
-    def run(self, iterations = 100, eps = 1.e-3):
+    def run(self, iterations = 100, eps = 1.e-4):
 
         #compute the second order term in computing x 
         seqcon_ord_term = 2 * self.coeff * torch.eye( self.sqA.shape[0] )  + self.rho_inner * self.sqA 
@@ -132,6 +132,9 @@ class InnerADMM():
 
             print("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
 
+            if PRES <= eps and DRES <= eps:
+                break
+
         return self.x
                  
  
@@ -145,7 +148,14 @@ class InnerADMM():
 class OADM():
     def __init__(self, data, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, batch_size = 8, model=None, theta_k=None):
         """
-             A class that implements OADM algrotithm:
+             A class that implements OADM algrotithm for solving problems of the form:
+
+                 Minimize ∑_i ||F_i(θ^k) + D_Fi(θ^k)(θ1 - θ^k)||_p + h/2 ||θ1 - θ^k||_2^2 + g(θ2) 
+
+                 Subj. to: θ2 ∈ C
+                           θ1 = θ2,
+
+             where in the base class g(θ2) = regularizerCoeff * ||θ2||_2^2 and C is all real numbers. Render getGfunc and updateTheta2 to for other cases. 
 
              Args:
                  data: dataset
@@ -185,20 +195,28 @@ class OADM():
             Minimize 1/B ∑_i ||A_ix + b_i||_p + \lambda ||x - c||_2^2
         """
 
+        #load a batch from data
         data_batch = next( iter(self.data_loader) )        
 
+        #initialize A and b 
         b = []
         A = []
        
+        #forward pass over the loaded batch
         for ind, data_i in enumerate(data_batch):
+            #add batch dimension
             data_i = torch.unsqueeze(data_i, 0)
 
+            #forward pass
             F_i = self.model( data_i)
 
+            #compute Jacobian and its square
             D_i, sqD_i = self.model.getJacobian(F_i, quadratic = quadratic)
 
+            #compute A and b
             with torch.no_grad():
-                b.append(  F_i - self.model.vecMult(vec = self.theta_k, Jacobian = D_i ) )
+
+                b.append(  F_i - self.model.vecMult( vec = self.theta_k, Jacobian = D_i ) )
                 
                 A.append( D_i )
 
@@ -211,10 +229,10 @@ class OADM():
 
         with torch.no_grad():
             #compute current model function
-            current_model_func = 0.0
+            current_model_func = self.h / 2 * (self.theta1 - self.theta_k).frobeniusNormSq()
 
             for ind, b_i in enumerate(b):
-                current_model_func += b_i + self.model.vecMult(vec = self.theta1, Jacobian = A[ ind ] )        
+                current_model_func += torch.norm( b_i + self.model.vecMult(vec = self.theta1, Jacobian = A[ ind ] ), p = self.p ) / self.batch_size
 
             c = 2 * self.rho / (self.rho + self.gamma + self.h) * (self.theta2 - self.dual) + \
                 2 * self.gamma / (self.rho + self.gamma + self.h)  * self.theta1 + \
@@ -223,8 +241,9 @@ class OADM():
             Blambda = self.batch_size * (self.rho + self.gamma + self.h) / 2
 
 
-        return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0, current_model_func / self.batch_size
+            return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0, current_model_func 
 
+    @torch.no_grad()
     def updtateTheta2(self):
         """
            Update theta2 via solving:
@@ -236,6 +255,12 @@ class OADM():
         return self.rho / (self.rho + self.regularizerCoeff) * (self.theta1 + self.dual)
 
     @torch.no_grad()
+    def getGfunc(self):
+        """
+            Compute the G function, i.e., terms in objective that corresponds to θ2.
+        """
+        return self.theta2.frobeniusNormSq()
+
     def run(self, iterations = 100, eps = 1.e-3, inner_iterations = 100, inner_eps = 1e-3):
         """
             Run the iterations of the OADM algrotihm.
@@ -244,24 +269,37 @@ class OADM():
 
         for k in range(iterations):
             #get terms for running Inner ADMM 
-            A, sqA_sum, b, c, Blambda, coeff, init_sol, current_model_func = self._getInnerADMMCoefficients()
+            A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients()
 
-            #adapt dual variables
-            self.dual += self.theta1 - self.theta2
+            with torch.no_grad():
+                #add G objective
+                OBJ += self.getGfunc()
 
-            #inner admm initialization 
-            InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = 1.0)
+                #primal residual
+                PRES = (self.theta1 - self.theta2).frobeniusNormSq()
 
-            #update theta1 via InnerADMM
-            self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
+             
 
-            #update theta2
-            self.theta2 = self.updtateTheta2()
+                #adapt dual variables
+                self.dual += self.theta1 - self.theta2
 
-           
+                #inner admm initialization 
+                InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = 1.0)
+
+                #update theta1 via InnerADMM
+                self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
+
+                old_theta2 = self.theta2 * 1
+
+                #update theta2
+                self.theta2 = self.updtateTheta2()
+
+                #dual residual
+                DRES = (self.theta2 - old_theta2).frobeniusNormSq()
 
             
-             
+                print("OADM, objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
+            
 
 
 class LocalSolver():
