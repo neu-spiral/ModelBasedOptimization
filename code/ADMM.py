@@ -3,7 +3,7 @@ import time
 import logging
 import numpy as np
 import logging
-from Net import AEC, DAEC, Embed, TensorList
+from Net import AEC, DAEC, TensorList
 from torch.utils.data import Dataset, DataLoader
 import torch
 from helpers import pNormProxOp, clearFile, estimate_gFunction, loadFile, _testOpt
@@ -70,7 +70,7 @@ class InnerADMM():
             self.z.append( z_i )
     
     @torch.no_grad()
-    def run(self, iterations = 100, eps = 1.e-4):
+    def run(self, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
 
         #compute the second order term in computing x 
         seqcon_ord_term = 2 * self.coeff * torch.eye( self.sqA.shape[0] )  + self.rho_inner * self.sqA 
@@ -101,23 +101,30 @@ class InnerADMM():
                 #sum up first order terms
                 if ind == 0:
 
-                    
-                    PRES = torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
-
-                    DRES = torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
-
-                    OBJ = torch.norm(self.y[ ind ], p = self.p)
-
                     first_ord_term = self.model.vecMult( self.b[ ind ] - self.z[ ind ] - self.y[ ind ], Jacobian = A_i, left = True )
+ 
+                    #in debug mode compute objective and residuals
+                    if debug:
+                    
+                        PRES = torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
+
+                        DRES = torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
+
+                        OBJ = torch.norm(self.y[ ind ], p = self.p)
+
 
                 else:
-                    PRES += torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
-
-                    DRES += torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
-
-                    OBJ += torch.norm(self.y[ ind ], p = self.p)
-
                     first_ord_term += self.model.vecMult( self.b[ ind ] - self.z[ ind ] - self.y[ ind ], Jacobian = A_i, left = True )
+
+                    #in debug mode compute objective and residuals
+                    if debug:
+
+                        PRES += torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
+
+                        DRES += torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
+
+                        OBJ += torch.norm(self.y[ ind ], p = self.p)
+
 
             #update x 
             first_ord_tot =  - self.rho_inner * first_ord_term + 2 * self.coeff * self.c
@@ -130,12 +137,13 @@ class InnerADMM():
 
             OBJ += self.coeff * (self.x - self.c).frobeniusNormSq()
 
-            print("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
+            if debug:
+                logger.info("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
 
             if PRES <= eps and DRES <= eps:
                 break
 
-        return self.x
+        return self.x 
                  
  
                 
@@ -180,7 +188,7 @@ class OADM():
         self.theta_k = theta_k
        
 
-        self.data_loader = DataLoader(data, batch_size = batch_size)
+        self.data_loader = DataLoader(data, batch_size = batch_size, shuffle = True)
          
         #initialize primal and dual variables
         self.theta1 = self.model.getParameters() * 0
@@ -189,14 +197,12 @@ class OADM():
 
 
 
-    def _getInnerADMMCoefficients(self, quadratic = True):
+    def _getInnerADMMCoefficients(self, data_batch, quadratic = True):
         """
             Compute the matrices and vectors for the problem to be solved via ADMM, i.e., 
             Minimize 1/B ∑_i ||A_ix + b_i||_p + \lambda ||x - c||_2^2
         """
 
-        #load a batch from data
-        data_batch = next( iter(self.data_loader) )        
 
         #initialize A and b 
         b = []
@@ -211,7 +217,11 @@ class OADM():
             F_i = self.model( data_i)
 
             #compute Jacobian and its square
-            D_i, sqD_i = self.model.getJacobian(F_i, quadratic = quadratic)
+            if quadratic:
+                D_i, sqD_i = self.model.getJacobian(F_i, quadratic = quadratic)
+
+            else:
+                D_i = self.model.getJacobian(F_i, quadratic = quadratic)
 
             #compute A and b
             with torch.no_grad():
@@ -220,10 +230,14 @@ class OADM():
                 
                 A.append( D_i )
 
-                if ind == 0:
-                    sqA_sum = sqD_i
+                if quadratic:
+                    if ind == 0:
+                        sqA_sum = sqD_i
+                    else:
+                        sqA_sum += sqD_i
+
                 else:
-                    sqA_sum += sqD_i
+                    sqA_sum = None
 
                 
 
@@ -234,14 +248,38 @@ class OADM():
             for ind, b_i in enumerate(b):
                 current_model_func += torch.norm( b_i + self.model.vecMult(vec = self.theta1, Jacobian = A[ ind ] ), p = self.p ) / self.batch_size
 
-            c = 2 * self.rho / (self.rho + self.gamma + self.h) * (self.theta2 - self.dual) + \
-                2 * self.gamma / (self.rho + self.gamma + self.h)  * self.theta1 + \
-                2 * self.h / (self.rho + self.gamma + self.h) * self.theta_k
+            c = self.rho / (self.rho + self.gamma + self.h) * (self.theta2 - self.dual) + \
+                self.gamma / (self.rho + self.gamma + self.h)  * self.theta1 + \
+                self.h / (self.rho + self.gamma + self.h) * self.theta_k
             
             Blambda = self.batch_size * (self.rho + self.gamma + self.h) / 2
 
 
             return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0, current_model_func 
+
+    def getFullObj(self, theta1, theta2):
+        """
+            Compute the obejective 
+                  Minimize 1/n ∑_i ||A_ix + b_i||_p + \lambda ||x - c||_2^2,
+            where the first summation is over all points.
+        """
+
+        #load whole data
+        whole_data = next( iter( DataLoader(self.data, batch_size = len( self.data ) ) ) )
+
+
+        #compute all A and b matrices and vectors
+        A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients(whole_data, quadratic = False )        
+
+
+        OBJ = self.h / 2 * (theta1 - self.theta_k). frobeniusNormSq() + self.getGfunc( theta2 )
+
+        for ind, A_i in enumerate(A):
+            #compute model functions
+            OBJ += torch.norm( self.model.vecMult( vec = theta1 , Jacobian = A_i) + b[ ind ], p = self.p) / len( self.data )
+
+        return OBJ
+   
 
     @torch.no_grad()
     def updtateTheta2(self):
@@ -249,58 +287,146 @@ class OADM():
            Update theta2 via solving:
                 Minimize G(theta2) + ρ||theta1^t + dual^t - theta2||_2^2,
            
-           where in this base class we set G(θ) = regularizerCoeff * ||θ||_2^2.
+           where in this base class we set G(θ) = regularizerCoeff/2 * ||θ||_2^2.
         """
 
         return self.rho / (self.rho + self.regularizerCoeff) * (self.theta1 + self.dual)
 
     @torch.no_grad()
-    def getGfunc(self):
+    def getGfunc(self, theta):
         """
             Compute the G function, i.e., terms in objective that corresponds to θ2.
-        """
-        return self.theta2.frobeniusNormSq()
 
-    def run(self, iterations = 100, eps = 1.e-3, inner_iterations = 100, inner_eps = 1e-3):
+                
+        """
+        return self.regularizerCoeff / 2 * theta.frobeniusNormSq()
+
+    def updateTheta1viaSGD(self, A, b, c, coeff):
+
+        #get current model vraibales
+        theta_VAR = self.model.getParameters(trackgrad=True)
+
+
+        #initialize thet_VAR to primalTheta
+        for var_ind, var in enumerate( self.theta1 ):
+            theta_VAR[var_ind].data.copy_( var )
+
+ 
+        optimizer = torch.optim.SGD(theta_VAR, lr=0.01, momentum=0.9)
+        
+
+        for _ in range(100):
+            optimizer.zero_grad()
+
+             
+            loss = coeff *  (theta_VAR - c).frobeniusNormSq()
+
+
+
+            for ind, A_i in enumerate(A):
+                loss += torch.norm(self.model.vecMult(vec = theta_VAR,  Jacobian = A_i ) + b[ind] , p = self.p ) 
+    
+
+            loss.backward()                    
+            
+            optimizer.step()
+
+
+    def runSGD(self, iterations = 100):
+
+        #get current model vraibales
+        theta_VAR = self.model.getParameters(trackgrad=True)
+
+        optimizer = torch.optim.SGD(theta_VAR, lr=0.01, momentum=0.9)
+
+
+        #initialize thet_VAR to primalTheta
+        for var_ind, var in enumerate( self.theta1 ):
+            theta_VAR[var_ind].data.copy_( var )
+
+        for _ in range(iterations):
+            optimizer.zero_grad()
+
+            loss = self.h / 2 * (theta_VAR - self.theta_k).frobeniusNormSq() + self.regularizerCoeff * theta_VAR.frobeniusNormSq()
+
+            data_batch = next( iter( self.data_loader ) )
+
+            #get terms for running Inner ADMM 
+            A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients( data_batch )
+     
+            for ind, A_i in enumerate(A):
+                loss += torch.norm(self.model.vecMult(vec = theta_VAR,  Jacobian = A_i ) + b[ind] , p = self.p ) / self.batch_size
+
+            loss.backward()
+
+            optimizer.step()
+ 
+            fullObj = self.getFullObj(theta_VAR, theta_VAR)
+            print("Full obj is ", fullObj)
+        
+
+    def run(self, iterations = 100, eps = 1.e-3, inner_iterations = 100, inner_eps = 1e-3, logger = logging.getLogger('OADM')):
         """
             Run the iterations of the OADM algrotihm.
         """ 
 
+        logger.info("Starting to run OADM iterations.")
+
+        self.theta_bar1 = self.theta1 * 1
+        self.theta_bar2 = self.theta2 * 1
 
         for k in range(iterations):
+
+            t_start = time.time()
+ 
+            #load a new batch 
+            data_batch = next( iter( self.data_loader ) )
+
             #get terms for running Inner ADMM 
-            A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients()
+            A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients( data_batch )
+
+
+            #log pre-computation time
+            logger.info("Computed Jacobians and cosnatnt terms in {:.1f} (s)".format(time.time() - t_start) )            
 
             with torch.no_grad():
                 #add G objective
-                OBJ += self.getGfunc()
+                OBJ += self.getGfunc(self.theta2)
+
 
                 #primal residual
                 PRES = (self.theta1 - self.theta2).frobeniusNormSq()
 
-             
-
-                #adapt dual variables
-                self.dual += self.theta1 - self.theta2
 
                 #inner admm initialization 
                 InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = 1.0)
 
+
                 #update theta1 via InnerADMM
                 self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
 
+                #keep currennt (old) theta2
                 old_theta2 = self.theta2 * 1
 
                 #update theta2
                 self.theta2 = self.updtateTheta2()
 
+                #adapt dual variables
+                self.dual = self.dual + self.theta1 - self.theta2
+
                 #dual residual
                 DRES = (self.theta2 - old_theta2).frobeniusNormSq()
 
             
-                print("OADM, objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
-            
+                #log objective and residual values
+                logger.info("Done the {}-th iterations of OADM in {:.1f} (s)".format(k, time.time() - t_start) )
+                logger.info("OADM, objective is {:.4f} and primal and dual residuals are {:.4f} and {:.4f}, respectively.".format(OBJ, PRES, DRES) )
 
+                #update average values
+                self.theta_bar1 = (self.theta_bar1 * k + self.theta1) / (k + 1)
+                self.theta_bar2 = (self.theta_bar2 * k + self.theta2) / (k + 1)
+
+            logger.info("Full objective for average thetas is {:.4f}".format(self.getFullObj(self.theta_bar1, self.theta_bar2)) )
 
 class LocalSolver():
     "LocalSolver for executing steps of ADMM."
@@ -347,6 +473,7 @@ class LocalSolver():
 
         #Froward pass for data
         output =  self.model( self.data )
+
         #Compute Jacobian
         with torch.no_grad():
             if quadratic:

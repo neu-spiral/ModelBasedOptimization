@@ -497,23 +497,37 @@ if __name__ == "__main__":
     parser.add_argument("--input_file", type=str)
     args = parser.parse_args() 
 
+    model = AEC(4,2)
+
+    tl1 = model.getParameters()
+
+    tl1 = tl1 * 2
+
+    tl2 = tl1
+
+    print("TL2 is ", tl2)
+
+    tl1 
+
+  
+
     #10 rows, 6 cols, embed size 3
-    model  = MF(100, 6, 3)
+#    model  = MF(100, 6, 3)
 
-    matrix = torch.randn(100, 6)
+#    matrix = torch.randn(100, 6)
 
-    ind = torch.randint(low = 0, high = 99, size = (1,))
+#    ind = torch.randint(low = 0, high = 99, size = (1,))
 
 
-    mat_ind = matrix[ ind ]
+#    mat_ind = matrix[ ind ]
 
-    data = (mat_ind, ind)
+#    data = (mat_ind, ind)
 
-    out = model( data ) 
+#    out = model( data ) 
 
-    jac = model.getJacobian(out)
+   # jac = model.getJacobian(out)
 
-    print(jac)
+   # print(jac)
 
    # ds_loader = DataLoader(dataset, batch_size=1)
     #model.getJacobian(output)

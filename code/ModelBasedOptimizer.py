@@ -493,7 +493,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file", type=str)
     parser.add_argument("--local_rank", type=int)
-    parser.add_argument("--m_dim", type=int, default=1)
+    parser.add_argument("--m_dim", type=int, default=10)
     parser.add_argument("--m_prime", type=int,  default=8)
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--batch_size", type=int, default=None, help="batch size for processing dataset, when None it is set equal to the dataset size.")
@@ -504,7 +504,7 @@ if __name__=="__main__":
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
     parser.add_argument("--outfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
-    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC'], default='ConvAEC')
+    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC'], default='AEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
     args = parser.parse_args()
 
@@ -557,9 +557,15 @@ if __name__=="__main__":
 
 
     #OADM
-    oadm_solver = OADM(dataset, rho=5.0, p=2, h=1.0, gamma=1.0, regularizerCoeff = 0.5, batch_size = 4, model = model, theta_k = model.getParameters() )
+    oadm_solver = OADM(dataset, rho=5.0, p=2, h=1.0, gamma=1.0, regularizerCoeff = 0.5, batch_size = 10, model = model, theta_k = model.getParameters() )
 
-    oadm_solver.run(iterations=20)
+
+
+    #oadm_solver.updateTheta1viaSGD(A, b, c, coeff)
+
+    #oadm_solver.run(iterations = 100, logger = logger)
+
+    oadm_solver.runSGD()
 
 
     
