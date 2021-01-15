@@ -8,7 +8,7 @@ import random
 import torch.distributed as dist
 import numpy as np
 import torch.nn as nn
-import torch.nn.functional as FUNC
+import torch.nn.functional as F
 import time
 from datasetGenetaor import unlabeledDataset
 from torch.utils.data import Dataset, DataLoader
@@ -486,6 +486,29 @@ class ConvAEC(Network):
         return torch.flatten(Y, start_dim = 1) - torch.flatten(X, start_dim = 1)
         
 
+class ConvAEC2(Network):
+    def __init__(self, k_in, k_h = 16, k_h2 = 4, kernel_x = 3, kernel_x2 = 3, kernel_y = 2, kernel_y2 = 2, kernel_pool = 2, device=torch.device("cpu")):
+        super(ConvAEC2, self).__init__(device)
+       
+        #Encoder
+        self.conv1 = nn.Conv2d(k_in, k_h, kernel_x, padding=1)  
+        self.conv2 = nn.Conv2d(k_h, k_h2, kernel_x2, padding=1)
+        self.pool = nn.MaxPool2d(kernel_pool, kernel_pool)
+       
+        #Decoder
+        self.t_conv1 = nn.ConvTranspose2d(k_h2, k_h, kernel_y, stride=2)
+        self.t_conv2 = nn.ConvTranspose2d(k_h, k_in, kernel_y, stride=2)
+
+
+    def forward(self, X):
+        H = F.relu(self.conv1(X))
+        H = self.pool(H)
+        H = F.relu(self.conv2(H))
+        H = self.pool(H)
+        H = F.relu(self.t_conv1(H))
+        Y = F.sigmoid(self.t_conv2(H))
+              
+        return torch.flatten(Y, start_dim = 1) - torch.flatten(X, start_dim = 1)
 
 
  
@@ -497,19 +520,20 @@ if __name__ == "__main__":
     parser.add_argument("--input_file", type=str)
     args = parser.parse_args() 
 
-    model = AEC(4,2)
+     
+    model = ConvAEC2(k_in = 1)
+
+    print( model)
+
+    X = torch.randn(1, 1 , 28, 28)
 
     tl1 = model.getParameters()
 
-    tl1 = tl1 * 2
+    Y = model( X)
 
-    tl2 = tl1
+    jac, sqjac = model.getJacobian(Y, quadratic = True)
 
-    print("TL2 is ", tl2)
-
-    tl1 
-
-  
+    print(sqjac.shape)
 
     #10 rows, 6 cols, embed size 3
 #    model  = MF(100, 6, 3)

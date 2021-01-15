@@ -40,6 +40,7 @@ def whichKey( filename, keywords = {'admm':'admm'}, keys_ordered=None):
 
     if keys_ordered == None:
         keys_ordered = sorted( keywords.keys() )
+
     for key in keys_ordered:
         if re.search(key, filename):
             return keywords[key]
@@ -97,23 +98,17 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
     plt.show()    
 
 def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear'):
-    def formVals(DICS_alg, sample=1):
-        vals = []
-        x_axis = []
-        for key in sorted( DICS_alg.keys()):
-            
-            vals.append( DICS_alg[key]  )
-            x_axis.append(key )
-        return x_axis, vals
 
-    fig, ax = plt.subplots()
-    fig.set_size_inches(8, 6)
-    i=0
-    for alg in DICS:
-        x_axis, vals = formVals( DICS[alg]  )
-        #print (vals[0:10])
-        plt.plot(x_axis, vals, lin_styles[i], label=alg, linewidth=3, markersize=18)
-        i += 1
+    #iterate over trjacetories for all leys (algorithms)
+    for i, alg in enumerate( DICS ):
+
+        #load trajectory
+        data_dict = DICS[alg]
+
+        #plot trajectory
+        plt.plot(list( data_dict.keys() ), list( data_dict.values() ), lin_styles[i], label=alg, linewidth=3, markersize=18)
+
+    #set sizes
     plt.xlabel(xaxis_label,fontsize = 18)
     plt.ylabel(yaxis_label, fontsize = 18)
     plt.xticks(fontsize = 18)
@@ -126,7 +121,8 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
     plt.yscale(y_scale )
 
 
-    fig.savefig(outfile+'.pdf',  bbox_extra_artists=(lgd,), format='pdf', bbox_inches='tight' )
+    #save figure
+    plt.savefig(outfile+'.pdf',  bbox_extra_artists=(lgd,), format='pdf', bbox_inches='tight' )
 
 def doubleAxeslinePlotter(DIC, outfile, yaxis_label='Objective', y2axis_label='Satisfied Constraints Ratio', xaxis_label='Time (s)', x_scale='linear', y_scale='linear'):
     def formVals(DIC_alg):
@@ -213,21 +209,26 @@ if __name__=="__main__":
     
     DICS = {}
     
-    keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
+   # keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
+    keywords = {'oadm': 'OADM', 'sgd': 'SGD'}
+
     max_dict = {}
+
     for filename in args.filenames:
 
         #find out file corresponds to which alg.
         Alg  = whichKey(filename, keywords)
+
         with open(filename, 'rb') as current_file:
             trace  = pickle.load(current_file)
 
         if Alg not in DICS:
             if args.xaxis == 'iterations':
-                DICS[Alg] = dict( [(key + 1, trace[key][args.yaxis]) for key in trace] )
+                DICS[Alg] = dict( [(ind + 1, val) for ind, val in enumerate( trace[ args.yaxis ] ) ] )
                 x_axis_label = 'iterations'
+
             elif args.xaxis ==  'time':
-                DICS[Alg] = dict( [(trace[key]['time'], trace[key][args.yaxis]) for key in trace] )
+                DICS[Alg] = dict( [ (trace['time'][ind], val) for ind, val in enumerate( trace[ args.yaxis ] ) ] )
                 x_axis_label = 'time(s)' 
         
     #        continue
@@ -238,4 +239,4 @@ if __name__=="__main__":
             y_axis_label = 'Time(s)'
 
     #Plot 
-    linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='log', y_scale='linear') 
+    linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='linear', y_scale='linear') 

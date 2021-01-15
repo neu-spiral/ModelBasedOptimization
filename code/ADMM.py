@@ -9,10 +9,13 @@ import torch
 from helpers import pNormProxOp, clearFile, estimate_gFunction, loadFile, _testOpt
 from  datasetGenetaor import unlabeledDataset
 import torch.nn as nn
+from torch.multiprocessing import Process
+import torch.distributed as dist
+import os
 
 #torch.manual_seed(1993)
 
-@torch.no_grad()
+#@torch.no_grad()
 class InnerADMM():
     def __init__(self, A, sqA, b, c, coeff, p, model, init_solution = None, rho_inner = 1.0):
         """
@@ -148,13 +151,40 @@ class InnerADMM():
  
                 
 
+
                                  
+class ParInnerADMM(InnerADMM):
+
+    def init_processes(self, rank, world_size, iterations, eps, debug, logger, backend = 'gloo'):
+
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group(backend, rank=rank, world_size = world_size)
+
+        self._runADMM(iterations = iterations, eps = eps, debug = debug, logger = logger)
+
+    def _runADMM(self, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
+
+        logger.info("To run ADMM")
+
+    def run(self, world_size = 1, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
             
+        processes = []
+
+        for rank in range(world_size):
+            #spawn processes
+            p = Process(target = self.init_processes, args = (rank, world_size, iterations, eps, debug, logger))
+
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
 
 
 
 class OADM():
-    def __init__(self, data, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, batch_size = 8, model=None, theta_k=None):
+    def __init__(self, data, model, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, rho_inner = 1.0,  batch_size = 8):
         """
              A class that implements OADM algrotithm for solving problems of the form:
 
@@ -177,24 +207,19 @@ class OADM():
         """
 
         self.data = data
+        self.model = model
+
         self.rho = rho
         self.p = p
         self.h = h
         self.gamma = gamma
+        self.rho_inner = rho_inner
         self.batch_size = batch_size
         self.regularizerCoeff = regularizerCoeff
-        self.model = model
 
-        self.theta_k = theta_k
-       
 
         self.data_loader = DataLoader(data, batch_size = batch_size, shuffle = True)
          
-        #initialize primal and dual variables
-        self.theta1 = self.model.getParameters() * 0
-        self.theta2 = self.model.getParameters() * 0
-        self.dual =  self.model.getParameters() * 0
-
 
 
     def _getInnerADMMCoefficients(self, data_batch, quadratic = True):
@@ -242,11 +267,7 @@ class OADM():
                 
 
         with torch.no_grad():
-            #compute current model function
-            current_model_func = self.h / 2 * (self.theta1 - self.theta_k).frobeniusNormSq()
 
-            for ind, b_i in enumerate(b):
-                current_model_func += torch.norm( b_i + self.model.vecMult(vec = self.theta1, Jacobian = A[ ind ] ), p = self.p ) / self.batch_size
 
             c = self.rho / (self.rho + self.gamma + self.h) * (self.theta2 - self.dual) + \
                 self.gamma / (self.rho + self.gamma + self.h)  * self.theta1 + \
@@ -255,30 +276,35 @@ class OADM():
             Blambda = self.batch_size * (self.rho + self.gamma + self.h) / 2
 
 
-            return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0, current_model_func 
+            return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0
 
-    def getFullObj(self, theta1, theta2):
+    def getObj(self, theta1, theta2, data_batch = None):
         """
             Compute the obejective 
-                  Minimize 1/n ∑_i ||A_ix + b_i||_p + \lambda ||x - c||_2^2,
+                  Minimize 1/n ∑_i ||A_i * θ1 + b_i||_p + h/2 * ||θ1 - θ_k||_2^2 + G(θ2),
             where the first summation is over all points.
         """
 
-        #load whole data
-        whole_data = next( iter( DataLoader(self.data, batch_size = len( self.data ) ) ) )
+        if data_batch is None:
+            #load whole data
+            data_batch = next( iter( DataLoader(self.data, batch_size = len( self.data ) ) ) )
+     
 
 
         #compute all A and b matrices and vectors
-        A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients(whole_data, quadratic = False )        
+        A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients(data_batch, quadratic = False )        
 
 
-        OBJ = self.h / 2 * (theta1 - self.theta_k). frobeniusNormSq() + self.getGfunc( theta2 )
+        #backward propagation is not needed for the rest of computations
+        with torch.no_grad():
+            #add the anchoring and the regulrization terms
+            OBJ = self.h / 2 * (theta1 - self.theta_k). frobeniusNormSq() + self.getGfunc( theta2 )
 
-        for ind, A_i in enumerate(A):
-            #compute model functions
-            OBJ += torch.norm( self.model.vecMult( vec = theta1 , Jacobian = A_i) + b[ ind ], p = self.p) / len( self.data )
+            for ind, A_i in enumerate(A):
+                #compute model functions for each datapoint
+                OBJ += torch.norm( self.model.vecMult( vec = theta1 , Jacobian = A_i ) + b[ ind ], p = self.p) / data_batch.shape[0]
 
-        return OBJ
+            return OBJ
    
 
     @torch.no_grad()
@@ -292,7 +318,6 @@ class OADM():
 
         return self.rho / (self.rho + self.regularizerCoeff) * (self.theta1 + self.dual)
 
-    @torch.no_grad()
     def getGfunc(self, theta):
         """
             Compute the G function, i.e., terms in objective that corresponds to θ2.
@@ -332,78 +357,143 @@ class OADM():
             optimizer.step()
 
 
-    def runSGD(self, iterations = 100):
+    def runSGD(self, iterations = 100, logger = logging.getLogger('SGD'), debug = False):
+
+        logger.info("Starting SGD iterations.")
 
         #get current model vraibales
-        theta_VAR = self.model.getParameters(trackgrad=True)
+        theta_VAR = self.model.getParameters(trackgrad=True) 
 
-        optimizer = torch.optim.SGD(theta_VAR, lr=0.01, momentum=0.9)
+        #get current theta_k (i.e., model parameters)
+        self.theta_k = self.model.getParameters() * 1
+
+        #NOTE: just need to be initialized (won't be used for running SGD!)
+        self.theta1 = self.model.getParameters() * 0
+        self.theta2 =  self.model.getParameters() * 0
+        self.dual = self.model.getParameters() * 0
 
 
-        #initialize thet_VAR to primalTheta
+        #initialize thet_VAR to zero
         for var_ind, var in enumerate( self.theta1 ):
             theta_VAR[var_ind].data.copy_( var )
 
-        for _ in range(iterations):
+        optimizer = torch.optim.SGD(theta_VAR, lr=0.01, momentum=0.0)
+
+       # theta_VAR *= 0
+
+        #keep track of trajectories
+        trace = {'OBJ': [], 'time': []}
+        t_start = time.time()
+
+
+        for k in range(iterations):
+
             optimizer.zero_grad()
 
-            loss = self.h / 2 * (theta_VAR - self.theta_k).frobeniusNormSq() + self.regularizerCoeff * theta_VAR.frobeniusNormSq()
+            loss = self.h / 2 * (theta_VAR - self.theta_k).frobeniusNormSq() +  self.getGfunc( theta_VAR )
 
             data_batch = next( iter( self.data_loader ) )
 
             #get terms for running Inner ADMM 
-            A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients( data_batch )
+            A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients( data_batch, quadratic = False )
      
             for ind, A_i in enumerate(A):
                 loss += torch.norm(self.model.vecMult(vec = theta_VAR,  Jacobian = A_i ) + b[ind] , p = self.p ) / self.batch_size
 
+        #    print(loss.item() )
             loss.backward()
 
             optimizer.step()
  
-            fullObj = self.getFullObj(theta_VAR, theta_VAR)
-            print("Full obj is ", fullObj)
+            if debug:
+                OBJ = self.getObj(theta_VAR, theta_VAR)
+
+                logger.info("Full objective is {}".format( OBJ ) )
+
+                #keep trace
+                trace['OBJ'].append( OBJ )
+                trace['time'].append( time.time() - t_start )
+
+        return theta_VAR, trace 
         
 
-    def run(self, iterations = 100, eps = 1.e-3, inner_iterations = 100, inner_eps = 1e-3, logger = logging.getLogger('OADM')):
+    def run(self, iterations = 100, eps = 1.e-3, eval_full_model_freq = 0.05, inner_iterations = 100, inner_eps = 1e-3, logger = logging.getLogger('OADM'), adapt_parameters = True, debug = False, world_size = 1):
         """
             Run the iterations of the OADM algrotihm.
         """ 
 
         logger.info("Starting to run OADM iterations.")
 
+        eval_full_model_iters = int( 1. / eval_full_model_freq )
+
+        #get current theta_k (i.e., model parameters)
+        self.theta_k = self.model.getParameters() * 1
+
+        #initialize primal and dual variables
+        self.theta1 = self.model.getParameters() * 0
+        self.theta2 = self.model.getParameters() * 0
+        self.dual =  self.model.getParameters() * 0
+
+        #initialize average variables
         self.theta_bar1 = self.theta1 * 1
         self.theta_bar2 = self.theta2 * 1
 
-        for k in range(iterations):
 
-            t_start = time.time()
- 
+        #compute the objective around the anchor point theta_k
+        self.OBJ_theta_k = self.getGfunc( self.theta_k )
+
+        for data_i in self.data_loader:
+            self.OBJ_theta_k += torch.sum( torch.norm( self.model( data_i ), p = self.p, dim = 1)  ) / len( self.data )
+
+        #keep track of trajectories
+        trace = {'OBJ': [], 'time': [], 'RES': []}
+
+        t_start = time.time()
+
+        #initalize stats   
+        k = 0
+        model_improvement = 0
+        PRES = eps + 1
+        DERS = eps + 1
+        stoch_OBJ = 0.0   
+
+        #OADM iterations
+        while k < iterations and (PRES > eps or DRES > eps):
+            #start of iteration
+            t_start_it = time.time()
+
+            if adapt_parameters:
+                #adapt parameters (proportional to strong convexity coefficient)
+                self.rho = self.h * (k + 1) 
+                self.gamma = self.regularizerCoeff * (k + 1)
+
             #load a new batch 
             data_batch = next( iter( self.data_loader ) )
 
             #get terms for running Inner ADMM 
-            A, sqA_sum, b, c, coeff, init_sol, OBJ = self._getInnerADMMCoefficients( data_batch )
+            A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients( data_batch )
 
 
             #log pre-computation time
-            logger.info("Computed Jacobians and cosnatnt terms in {:.1f} (s)".format(time.time() - t_start) )            
+            logger.info("Computed Jacobians and cosnatnt terms in {:.1f} (s)".format(time.time() - t_start_it) )            
 
             with torch.no_grad():
-                #add G objective
-                OBJ += self.getGfunc(self.theta2)
-
-
-                #primal residual
-                PRES = (self.theta1 - self.theta2).frobeniusNormSq()
 
 
                 #inner admm initialization 
-                InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = 1.0)
+                if world_size == 1:
+                    InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = self.rho_inner)
+ 
+                    #update theta1 via InnerADMM
+                    self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
 
+                else:
+                    #if number of processes is larger than 1 (parallel setting) initialize the appropriate InnerADMM class
+                    InnerADMM_obj = ParInnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = self.rho_inner)
 
-                #update theta1 via InnerADMM
-                self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
+                    #update theta1 via InnerADMM
+                    self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps, world_size = world_size)
+
 
                 #keep currennt (old) theta2
                 old_theta2 = self.theta2 * 1
@@ -412,21 +502,71 @@ class OADM():
                 self.theta2 = self.updtateTheta2()
 
                 #adapt dual variables
-                self.dual = self.dual + self.theta1 - self.theta2
+                self.dual += self.theta1 - self.theta2
+
+
+                #primal residual
+                PRES = (self.theta1 - self.theta2).frobeniusNormSq()
 
                 #dual residual
                 DRES = (self.theta2 - old_theta2).frobeniusNormSq()
-
-            
-                #log objective and residual values
-                logger.info("Done the {}-th iterations of OADM in {:.1f} (s)".format(k, time.time() - t_start) )
-                logger.info("OADM, objective is {:.4f} and primal and dual residuals are {:.4f} and {:.4f}, respectively.".format(OBJ, PRES, DRES) )
 
                 #update average values
                 self.theta_bar1 = (self.theta_bar1 * k + self.theta1) / (k + 1)
                 self.theta_bar2 = (self.theta_bar2 * k + self.theta2) / (k + 1)
 
-            logger.info("Full objective for average thetas is {:.4f}".format(self.getFullObj(self.theta_bar1, self.theta_bar2)) )
+                #compute the infeasibility (residual)
+                FEAS = (self.theta_bar1 - self.theta_bar2).frobeniusNormSq()
+
+                
+
+
+            #evaluate objective for sampled data
+            stoch_OBJ += self.getObj(self.theta1, self.theta2, data_batch)
+
+            #evaluate an estimation of model improvement 
+            model_improvement = self.OBJ_theta_k - stoch_OBJ / (k + 1)
+
+            logger.info("{}-th iterations of OADM is done in {:.1f} (s), PRES and DRES are {:.4f} and {:.4f}, respectively.".format(k, time.time() - t_start_it, PRES, DRES ) )
+            logger.info("Infeasibility for average thetas is {:.4f}, avaraged objective value is {:.4f}".format( FEAS, stoch_OBJ / (k + 1) ) )
+            logger.info("Model improvement is {:.4f}.".format( model_improvement ) )
+  
+            if debug:
+
+                #compute the full objective
+                OBJ = self.getObj(self.theta_bar1, self.theta_bar1)
+
+                #compute model improvement
+                model_improvement  = self.getModelImprovement( self.theta_bar1 )
+
+                #log objective and residual values
+                logger.info("OADM, primal and dual residuals are {:.4f} and {:.4f}, respectively.".format(PRES, DRES) )
+                logger.info("Full objective for average thetas is {:.4f}".format( OBJ ) )
+
+                #append to trace
+                trace['OBJ'].append( OBJ )
+                trace['RES'].append( RES )
+                trace['time'].append( time.time() - t_start ) 
+
+      
+            
+            #increment k
+            k += 1    
+
+        return trace, model_improvement
+    
+    def getModelImprovement(self, theta_var):
+        """
+            Compute the improvement of the objective function (i.e., the model function) w.r.t. anchor point theta_k.
+        """  
+
+        OBJ = self.getObj(theta_var, theta_var) 
+
+        return self.OBJ_theta_k - OBJ
+
+
+
+            
 
 class LocalSolver():
     "LocalSolver for executing steps of ADMM."
@@ -780,12 +920,19 @@ class solveConvex(GlobalSolvers):
 @torch.no_grad()
 class solveWoodbury(GlobalSolvers):
 
-    def _setMat(self, ADMMsolvers):
-        "Compute D^T D."
+    def __init__(self, A, b, rho):
 
-        self.dim_N = ADMMsolvers[0].output.size()[1]
-        self.dim_n = len(ADMMsolvers) 
-        A = torch.eye(self.dim_n * self.dim_N)
+        self.A = A
+        self.b = b
+        self.rho
+
+    def _setMat(self, A):
+        "Compute the matrix ∑_i A_i A_iT."
+
+        self.dim_N = b[0].shape[-1]
+        self.dim_n = len(b) 
+
+        AAT = torch.eye(self.dim_n * self.dim_N)
 
        
         for solver_ind_i, ADMMsolver_i in enumerate(ADMMsolvers):
@@ -794,7 +941,8 @@ class solveWoodbury(GlobalSolvers):
                     for row_ind_j, row_j in   enumerate(ADMMsolver_j.Jac):
                         A_row_ind = solver_ind_i * self.dim_N + row_ind_i
                         A_col_ind = solver_ind_j * self.dim_N + row_ind_j
-                        A[A_row_ind, A_col_ind] += row_i * row_j * ADMMsolvers[0].rho
+
+                        AAT[A_row_ind, A_col_ind] += row_i * row_j * ADMMsolvers[0].rho
 
         self.Amat = A
  

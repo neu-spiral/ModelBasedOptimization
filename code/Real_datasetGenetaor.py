@@ -17,17 +17,61 @@ torch.manual_seed(1993)
 
 
 
-class dropLabelDataset(Dataset):
-    def __init__(self, dataset):
+class dropLabelAddNoiseDataset(Dataset):
+    def __init__(self, dataset, outliers_idx = None, threshold = 0.5, high = 1.0, low = 0.0):
+        """
+            Args:
+                dataset: A loaded dataset
+                outliers_idx: A binary array or Tensor showing the indicies corresponding to outliers
+        """
+
         self.dataset = dataset
+
+        self.outliers_idx = outliers_idx
+
+        self.threshold = threshold
+        self.low = low
+        self.high = high
+
+        #add noise
+        for ind in range(len(self.dataset)):
+            if outliers_idx[ind] == 1:
+                self.noise_fn( self.dataset[ind][0] )
+
+
+    def noise_fn(self, img):
+
+        large_entrees = img >= self.threshold
+
+        img[ large_entrees ] = self.high
+
+        img[ torch.logical_not( large_entrees ) ] = self.low
+
+        return img
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
+       
         if torch.is_tensor(idx):
             idx = idx.tolist()
+       
+
         return self.dataset[idx][0]
+
+def binaryNoise(img, threshold = 0.5, high = 1.0, low = 0.0):
+    """
+        Change all pixel values larger than threshold to high and all others to low.
+    """
+    
+    large_entrees = img >= 0.5
+
+    img[ large_entrees ] = 1.0
+    
+    img[ torch.logical_not( large_entrees ) ] = 0.0
+
+    return img
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
@@ -40,20 +84,27 @@ if __name__=="__main__":
     args = parser.parse_args()
 
 
-    my_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,) )] )
+    my_transform = transforms.Compose([transforms.ToTensor()] )   ##, transforms.Lambda(lambda img: binaryNoise(img, threshold = 0.4)) ] )#, transforms.Normalize((0.1307,), (0.3081,) )] )
 
     #Download data
     my_dataset_class = eval('datasets.' + args.dataset_name)
-    my_dataset = dropLabelDataset( my_dataset_class(args.data_dir, train=False, download=True, transform=my_transform) )
+  
+    dataset = my_dataset_class(args.data_dir, train=True, download=True, transform=my_transform)
+
+
+
+    outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones( len(dataset ) ) * args.outliers )
+
+    outliers_idx = outliers_indices_distr.sample()
 
     
-
+    datasetWithOutliers = dropLabelAddNoiseDataset( dataset, outliers_idx = outliers_idx )
 
     if args.local_rank != None:
         torch.distributed.init_process_group(backend='gloo',
                                          init_method='env://')
    
-    dumpFile(args.outfile, my_dataset)
+    dumpFile(args.outfile, datasetWithOutliers)
 
     #Sampler
     #data_sampler  = torch.utils.data.distributed.DistributedSampler(my_dataset, rank=args.local_rank)
