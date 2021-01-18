@@ -12,6 +12,7 @@ import torch.nn as nn
 from torch.multiprocessing import Process
 import torch.distributed as dist
 import os
+import math
 
 #torch.manual_seed(1993)
 
@@ -83,7 +84,7 @@ class InnerADMM():
         
     
         for k in range(iterations):
-            
+            t_st = time.time() 
 
             for ind, A_i in enumerate(self.A):
                 #compute the affine function
@@ -141,6 +142,7 @@ class InnerADMM():
             OBJ += self.coeff * (self.x - self.c).frobeniusNormSq()
 
             if debug:
+                logger.info("{}-th iterations of Inner ADMM done in {:.2f}.".format(k, time.time() - t_st) )
                 logger.info("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
 
             if PRES <= eps and DRES <= eps:
@@ -159,20 +161,134 @@ class ParInnerADMM(InnerADMM):
 
         os.environ['MASTER_ADDR'] = '127.0.0.1'
         os.environ['MASTER_PORT'] = '29500'
+
         dist.init_process_group(backend, rank=rank, world_size = world_size)
 
-        self._runADMM(iterations = iterations, eps = eps, debug = debug, logger = logger)
+        self._runADMM(rank, world_size, iterations = iterations, eps = eps, debug = debug, logger = logger)
 
-    def _runADMM(self, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
+    def _runADMM(self, rank, world_size, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
 
-        logger.info("To run ADMM")
+        logger.info("Starting Parallel Inner ADMM")
+
+        #partition indices to be processed by each rank
+        partitions = {}
+        
+        st_ind = 0
+
+        #number of indices to be processed by each rank
+        partition_size = math.ceil(len(self.A) / world_size)
+
+        for r in range(world_size):
+           
+            end_ind = min( partition_size + st_ind, len(self.A) )
+
+            partitions[r] = range(st_ind, end_ind)
+   
+            st_ind =  end_ind
+
+
+
+        #main iterations 
+        for k in range(iterations):
+
+
+            #go over the corresponding indices 
+            for ind in partitions[rank]:
+
+                A_i = self.A[ind]
+
+                #compute the affine function
+                Ax_plus_b_i = self.model.vecMult(self.x, Jacobian = A_i) + self.b[ ind ]
+
+
+
+                self.z[ind] = self.z[ind] + self.y[ ind ] - Ax_plus_b_i
+
+
+                #old y
+                old_y_i = self.y[ ind ]
+
+
+                #update y via prox. operator for p-norms                   
+                self.y[ ind ] = pNormProxOp( Ax_plus_b_i - self.z[ ind ], self.rho_inner, g_est = self.g_est, p = self.p)
+
+                #sum up first order terms
+                if ind == partitions[rank][0]:
+
+                    first_ord_term = self.model.vecMult( self.b[ ind ] - self.z[ ind ] - self.y[ ind ], Jacobian = A_i, left = True )
+
+                    #in debug mode compute objective and residuals
+                    if debug:
+
+                        PRES = torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
+
+                        DRES = torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
+
+                        OBJ = torch.norm(self.y[ ind ], p = self.p)
+
+
+                else:
+                    first_ord_term += self.model.vecMult( self.b[ ind ] - self.z[ ind ] - self.y[ ind ], Jacobian = A_i, left = True )
+
+                    #in debug mode compute objective and residuals
+                    if debug:
+
+                        PRES += torch.norm(self.y[ ind ] - Ax_plus_b_i, p=2) ** 2
+
+                        DRES += torch.norm(self.y[ ind ] - old_y_i, p=2) ** 2
+
+                        OBJ += torch.norm(self.y[ ind ], p = self.p)
+
+
+            #sum up first-order terms and residuals across processes
+            for first_ord_tens in first_ord_term:
+                dist.all_reduce(first_ord_tens, op=dist.reduce_op.SUM)
+ 
+            if debug:
+                dist.all_reduce(PRES,  op=dist.reduce_op.SUM)
+                dist.all_reduce(DRES,  op=dist.reduce_op.SUM)
+                dist.all_reduce(OBJ,  op=dist.reduce_op.SUM)
+
+                if PRES <= eps and DRES <= eps:
+                    break
+
+            #rank 0 updates x 
+       
+            if rank == 0:
+                first_ord_tot =  - self.rho_inner * first_ord_term + 2 * self.coeff * self.c
+
+                first_ord_tot = first_ord_tot.getTensor()
+
+                new_x = torch.matmul(self.seqcon_ord_term_inv, first_ord_tot )
+
+                self.x = TensorList.formFromTensor(new_x, self.c.TLShape() )
+
+                OBJ += self.coeff * (self.x - self.c).frobeniusNormSq()
+
+                if debug:
+                    logger.info("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
+   
+            #synch x (updated by rank 0)
+            for x_tens in self.x:
+                torch.distributed.broadcast(x_tens, src = 0)
+                        
+
 
     def run(self, world_size = 1, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
             
+
+        #compute the second order term in computing x 
+        seqcon_ord_term = 2 * self.coeff * torch.eye( self.sqA.shape[0] )  + self.rho_inner * self.sqA
+
+        #compute the inverse of the second order term
+        self.seqcon_ord_term_inv = torch.inverse( seqcon_ord_term )
+
+
         processes = []
 
+
+        #spawn processes
         for rank in range(world_size):
-            #spawn processes
             p = Process(target = self.init_processes, args = (rank, world_size, iterations, eps, debug, logger))
 
             p.start()
@@ -182,6 +298,7 @@ class ParInnerADMM(InnerADMM):
             p.join()
 
 
+        return self.x
 
 class OADM():
     def __init__(self, data, model, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, rho_inner = 1.0,  batch_size = 8):
@@ -219,7 +336,12 @@ class OADM():
 
 
         self.data_loader = DataLoader(data, batch_size = batch_size, shuffle = True)
-         
+
+ 
+        #initialize optimization variables 
+        self.theta1 = self.model.getParameters() * 0
+        self.theta2 =  self.model.getParameters() * 0
+        self.dual = self.model.getParameters() * 0
 
 
     def _getInnerADMMCoefficients(self, data_batch, quadratic = True):
@@ -232,12 +354,23 @@ class OADM():
         #initialize A and b 
         b = []
         A = []
-       
-        #forward pass over the loaded batch
-        for ind, data_i in enumerate(data_batch):
-            #add batch dimension
-            data_i = torch.unsqueeze(data_i, 0)
 
+            
+
+        #forward pass over the loaded batch
+        for ind in range(self.batch_size):
+
+            #NOTE: labeld data
+            if type( data_batch ) == list:
+                data_i = torch.unsqueeze(data_batch[0][ ind ], 0), torch.unsqueeze(data_batch[1][ ind ], 0)
+                              
+
+            else:
+                data_i = data_batch[ ind ]
+                #add batch dimension
+                data_i = torch.unsqueeze(data_i, 0)
+
+             
             #forward pass
             F_i = self.model( data_i)
 
@@ -278,6 +411,41 @@ class OADM():
 
             return A, sqA_sum, b, c, Blambda, self.theta1 * 1.0
 
+    def _getInnerADMMCoefficientsPAR(self, world_size, data_batch, quadratic = True):
+        
+        with torch.no_grad():
+            c = self.rho / (self.rho + self.gamma + self.h) * (self.theta2 - self.dual) + \
+                self.gamma / (self.rho + self.gamma + self.h)  * self.theta1 + \
+                self.h / (self.rho + self.gamma + self.h) * self.theta_k
+
+            Blambda = self.batch_size * (self.rho + self.gamma + self.h) / 2
+
+
+        processes = []
+
+
+        #spawn processes
+        for rank in range(world_size):
+            p = Process(target = self.init_processes_and_getJac, args = (rank, world_size) )
+
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+
+
+    def init_processes_and_getJac(self, rank, world_size, backend='gloo'):
+
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+
+        dist.init_process_group(backend, rank=rank, world_size = world_size)
+
+         
+        
+
+
     def getObj(self, theta1, theta2, data_batch = None):
         """
             Compute the obejective 
@@ -289,7 +457,11 @@ class OADM():
             #load whole data
             data_batch = next( iter( DataLoader(self.data, batch_size = len( self.data ) ) ) )
      
-
+        #NOTE: labeled datasets
+        if type( data_batch ) == list:
+            data_batch_size = data_batch[0].shape[0]
+        else:
+            data_batch_size = data_batch.shape[0]
 
         #compute all A and b matrices and vectors
         A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients(data_batch, quadratic = False )        
@@ -302,7 +474,7 @@ class OADM():
 
             for ind, A_i in enumerate(A):
                 #compute model functions for each datapoint
-                OBJ += torch.norm( self.model.vecMult( vec = theta1 , Jacobian = A_i ) + b[ ind ], p = self.p) / data_batch.shape[0]
+                OBJ += torch.norm( self.model.vecMult( vec = theta1 , Jacobian = A_i ) + b[ ind ], p = self.p) / data_batch_size
 
             return OBJ
    
@@ -417,7 +589,7 @@ class OADM():
         return theta_VAR, trace 
         
 
-    def run(self, iterations = 100, eps = 1.e-3, eval_full_model_freq = 0.05, inner_iterations = 100, inner_eps = 1e-3, logger = logging.getLogger('OADM'), adapt_parameters = True, debug = False, world_size = 1):
+    def run(self, iterations = 100, eps = 1.e-3, eval_full_model_freq = 0.05, inner_iterations = 500, inner_eps = 1e-3, logger = logging.getLogger('OADM'), adapt_parameters = True, debug = False, world_size = 1):
         """
             Run the iterations of the OADM algrotihm.
         """ 
@@ -470,6 +642,7 @@ class OADM():
             #load a new batch 
             data_batch = next( iter( self.data_loader ) )
 
+
             #get terms for running Inner ADMM 
             A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients( data_batch )
 
@@ -485,14 +658,14 @@ class OADM():
                     InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = self.rho_inner)
  
                     #update theta1 via InnerADMM
-                    self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps)
+                    self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps, logger = logger)
 
                 else:
                     #if number of processes is larger than 1 (parallel setting) initialize the appropriate InnerADMM class
                     InnerADMM_obj = ParInnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = self.rho_inner)
 
                     #update theta1 via InnerADMM
-                    self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps, world_size = world_size)
+                    self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps, world_size = world_size, logger = logger)
 
 
                 #keep currennt (old) theta2

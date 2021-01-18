@@ -184,14 +184,15 @@ if __name__=="__main__":
 #        dumpFile('interpolations/p' + str(p),  estimate_g)
 #        print('Estimation and saving done for {}'.format(p))
 
-#    t_s = time.time()
+    t_s = time.time()
 #    logging.getLogger().setLevel(logging.INFO) 
     V = torch.randn(1, args.n)
     V =  torch.abs(V)
+
+    
     U_p = pNormProxOp(V, rho=args.rho, p=args.p)
-    print(U_p)
     #U = EuclidianProxOp(V, args.rho)
 #    print (U_p.size())
-#    t_e = time.time()
-    print (   _testOpt(U_p, V, rho=args.rho, p=args.p) )
+    t_e = time.time()
+    print("Time taken is ", t_e - t_s)
 #    print ("Time {} seconds".format(t_e - t_s) )

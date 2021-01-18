@@ -17,7 +17,7 @@ colors =['b', 'g', 'r', 'c' ,'m' ,'y' ,'k' ,'w']
 hatches = ['////', '/', '\\', '\\\\', '-', '--', '+', '']
 lin_styles = ['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-']
 
-Algorithms = {'admm':'ADMM', 'sgd':'SGD'}
+Algorithms = {'admm':'ADMM', 'sgd3':'SGD (lr=1e-3)', 'sgd4':'SGD (lr=1e-4)', 'sgd5':'SGD (lr=1e-5)'}
 batch_sizes = [100, 32, 16, 8,  4, 2, 1]
 
 
@@ -28,6 +28,7 @@ def whichAlg( filename, keywords = {'admm':'admm'}):
     "Find filename corresponds to which algrotihm."
     if re.search('admm',  filename ):
         return 'admm'
+
     elif re.search('sgd',  filename ):
         for bsize in batch_sizes:
             if  re.search('sgd' + str(bsize),  filename ):
@@ -210,7 +211,7 @@ if __name__=="__main__":
     DICS = {}
     
    # keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
-    keywords = {'oadm': 'OADM', 'sgd': 'SGD'}
+    keywords = {'admm':'ADMM', 'sgd3':'SGD (lr=1e-3)', 'sgd4':'SGD (lr=1e-4)', 'sgd5':'SGD (lr=1e-5)'}
 
     max_dict = {}
 

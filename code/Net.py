@@ -140,9 +140,10 @@ class TensorList(list):
 
 class Network(nn.Module):
     "A generic class written for definiing a loss function F(θ; X) where X is the input data and θ is the parametr."
-    def __init__(self, device):
+    def __init__(self, device = torch.device("cpu")):
         super(Network, self).__init__()
         self.device = device
+
 
     @torch.no_grad()
     def getParameters(self, trackgrad=False):
@@ -153,9 +154,11 @@ class Network(nn.Module):
         if trackgrad:
             outL = []
             for param in self.parameters():
-                new_param = torch.zeros(param.size(), requires_grad=True)
+                new_param = torch.zeros(param.size(), requires_grad=True, device = self.device)
+
                 new_param.copy_( param.data )
                 outL.append( new_param )
+
             return TensorList( outL  )
         else:
             return TensorList([param.data  for param in self.parameters()])
@@ -168,7 +171,7 @@ class Network(nn.Module):
         """
             Return gradient w.r.t. model parameters of all model layers  as a TensorList object.
         """
-        return  TensorList( [parameter.grad.clone()  for parameter in self.parameters()]  )
+        return  TensorList( [parameter.grad.clone().to(self.device)  for parameter in self.parameters()]  )
 
     @torch.no_grad()
     def getGrads_old(self):
@@ -212,6 +215,7 @@ class Network(nn.Module):
         #Get grads
         if debug:
              return self.getGrads_old()
+
         return  self.getGrads()
 
             
@@ -353,16 +357,20 @@ class Network(nn.Module):
 
 class Linear(Network):
     "A class for shallow Linear models; the input size is m anbd the output size is m_prime."
-    def __init__(self, m , m_prime, device=torch.device("cpu")):
+    def __init__(self, m , m_prime, hidden = 16, device=torch.device("cpu")):
         super(Linear, self).__init__(device)
         self.m = m
         self.m_prime = m_prime
-        self.fc1 = nn.Linear(m, m_prime)
+        self.fc1 = nn.Linear(m, hidden)
+        self.fc2 = nn.Linear(hidden, m_prime)
 
     def forward(self, data):
         "Given an input X execute a forward pass."
         X, Y = data
-        return Y - self.fc1(X) 
+
+        h = F.sigmoid( self.fc1(X) )
+        Y_model = F.sigmoid( self.fc2(h) )
+        return Y - Y_model
 
 class AEC(Network):
     "A class for Autoencoders; the input size is m anbd the encoded size is m_prime."
@@ -382,7 +390,7 @@ class AEC(Network):
         X = X.view(X.size(0), -1)
 
         #apply the linear encoder followed by activation function 
-        Y = torch.sigmoid( self.fc1(X) )
+        Y = F.sigmoid( self.fc1(X) )
 
         #apply linear decoder 
         Y = self.fc2(Y)
@@ -487,25 +495,25 @@ class ConvAEC(Network):
         
 
 class ConvAEC2(Network):
-    def __init__(self, k_in, k_h = 16, k_h2 = 4, kernel_x = 3, kernel_x2 = 3, kernel_y = 2, kernel_y2 = 2, kernel_pool = 2, device=torch.device("cpu")):
+    def __init__(self, k_in, k_h = 16, k_h2 = 4, kernel_x = 3, kernel_x2 = 3, kernel_y = 3, kernel_y2 = 3, kernel_pool = 2, device=torch.device("cpu")):
         super(ConvAEC2, self).__init__(device)
        
         #Encoder
-        self.conv1 = nn.Conv2d(k_in, k_h, kernel_x, padding=1)  
-        self.conv2 = nn.Conv2d(k_h, k_h2, kernel_x2, padding=1)
-        self.pool = nn.MaxPool2d(kernel_pool, kernel_pool)
+        self.conv1 = nn.Conv2d(k_in, k_h, kernel_x)  
+        self.conv2 = nn.Conv2d(k_h, k_h2, kernel_x2)
+       # self.pool = nn.MaxPool2d(kernel_pool, kernel_pool)
        
         #Decoder
-        self.t_conv1 = nn.ConvTranspose2d(k_h2, k_h, kernel_y, stride=2)
-        self.t_conv2 = nn.ConvTranspose2d(k_h, k_in, kernel_y, stride=2)
+        self.t_conv1 = nn.ConvTranspose2d(k_h2, k_h, kernel_y, stride=1)
+        self.t_conv2 = nn.ConvTranspose2d(k_h, k_in, kernel_y, stride=1)
 
 
     def forward(self, X):
-        H = F.relu(self.conv1(X))
-        H = self.pool(H)
-        H = F.relu(self.conv2(H))
-        H = self.pool(H)
-        H = F.relu(self.t_conv1(H))
+        H = F.sigmoid(self.conv1(X))
+       # H = self.pool(H)
+        H = F.sigmoid(self.conv2(H))
+       # H = self.pool(H)
+        H = F.sigmoid(self.t_conv1(H))
         Y = F.sigmoid(self.t_conv2(H))
               
         return torch.flatten(Y, start_dim = 1) - torch.flatten(X, start_dim = 1)
@@ -521,20 +529,25 @@ if __name__ == "__main__":
     args = parser.parse_args() 
 
      
-    model = ConvAEC2(k_in = 1)
 
-    print( model)
+    if torch.cuda.is_available():  
+        dev = "cuda:0" 
+    else:  
+        dev = "cpu"  
 
-    X = torch.randn(1, 1 , 28, 28)
+    device = torch.device(dev)
 
-    tl1 = model.getParameters()
+    model = ConvAEC2(k_in = 1, k_h = 8, device = device)
 
-    Y = model( X)
+    X = torch.randn(1, 1 , 28, 28).to( device)
+
+
+    Y = model( X )
 
     jac, sqjac = model.getJacobian(Y, quadratic = True)
 
-    print(sqjac.shape)
 
+    print(sqjac.shape)
     #10 rows, 6 cols, embed size 3
 #    model  = MF(100, 6, 3)
 
