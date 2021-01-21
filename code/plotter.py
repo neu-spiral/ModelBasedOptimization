@@ -15,7 +15,7 @@ import datetime
 
 colors =['b', 'g', 'r', 'c' ,'m' ,'y' ,'k' ,'w']
 hatches = ['////', '/', '\\', '\\\\', '-', '--', '+', '']
-lin_styles = ['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-']
+lin_styles = ['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-'] * 2 #['r^', 'b-*', 'rD*', 'cX-', 'm*-','yH-']
 
 Algorithms = {'admm':'ADMM', 'sgd3':'SGD (lr=1e-3)', 'sgd4':'SGD (lr=1e-4)', 'sgd5':'SGD (lr=1e-5)'}
 batch_sizes = [100, 32, 16, 8,  4, 2, 1]
@@ -211,7 +211,15 @@ if __name__=="__main__":
     DICS = {}
     
    # keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
-    keywords = {'admm':'ADMM', 'sgd3':'SGD (lr=1e-3)', 'sgd4':'SGD (lr=1e-4)', 'sgd5':'SGD (lr=1e-5)'}
+   # keywords = {'MBO':'MBO', 'SGD_lr0.001':'SGD (lr=1e-3)', 'SGD_lr0.0001':'SGD (lr=1e-4)', 'SGD_lr0.00001':'SGD (lr=1e-5)'}
+
+    keywords = {}
+    for BS in ['8', '32', '128']:
+        for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
+            for momentum in ["0.0", "0.5", "0.9"]:
+                key = "BS{}_rho_inner5.0_SGD_lr{}_momentum{}".format(BS, lr, momentum)
+
+                keywords[key] = "batch-size {}, lr {}, momentum {}".format(BS, lr, momentum)
 
     max_dict = {}
 

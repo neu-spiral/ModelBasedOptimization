@@ -1,0 +1,30 @@
+#!/bin/bash
+
+#SBATCH --nodes=1
+#SBATCH --tasks=1
+#SBATCH --output=slurm-logs/MBO%j.out
+#SBATCH --error=slurm-logs/MBO%j.err
+
+#arguments 
+input=$1
+p=$2
+iters=$3
+NUM_PROC_YOU_HAVE=$4
+
+#set parameters 
+inner_iterations=1000
+model=AEC
+l2SquaredSolver=MBO
+
+#data dimensions
+m=10
+m_prime=8
+
+
+if [ $l2SquaredSolver == MBO ]
+then
+    python -m torch.distributed.launch  --nproc_per_node=$NUM_PROC_YOU_HAVE  ModelBasedOptimizer.py --input_file  data/synthetic/$input --iterations $iters  --inner_iterations $inner_iterations  --logfile logfiles/$model$input"_"$p  --rho 1.0 --p $p  --tracefile data/traces/$model$input"_"$p --outfile data/model_parm/$model$input"_"$p  --l2SquaredSolver $l2SquaredSolver --net_model $model  --m_dim $m --m_prime $m_prime
+else
+    python  -m torch.distributed.launch --nproc_per_node=$NUM_PROC_YOU_HAVE  ModelBasedOptimizer.py --input_file  data/synthetic/$input --iterations $iters  --inner_iterations $inner_iterations  --logfile logfiles/$model$input"_"$p$l2SquaredSolver  --rho 1.0 --p $p  --tracefile data/traces/$model$input"_"$p$l2SquaredSolver --outfile data/model_parm/$model$input"_"$p$l2SquaredSolver --net_model $model   --m_dim $m --m_prime $m_prime
+
+fi

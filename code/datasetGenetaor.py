@@ -36,8 +36,10 @@ class MySampler(torch.utils.data.Sampler):
 
 
 class unlabeledDataset(Dataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, outliers_idx):
         self.dataset = dataset
+        self.outliers_idx = outliers_idx
+
     def __len__(self):
         return len(self.dataset)
     def __getitem__(self, idx):
@@ -105,9 +107,9 @@ if __name__=="__main__":
         outfile += args.problem_type
     #create a Dataset object 
     if args.problem_type == 'unlabeled':
-        dataset = unlabeledDataset( data )
+        dataset = unlabeledDataset( data, outliers_ind )
     else:
-        dataset = labeledDataset( data )
+        dataset = labeledDataset( data, outliers_ind )
    # torch.save(data, outfile)
 
     dumpFile(outfile, dataset) 

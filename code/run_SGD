@@ -1,0 +1,40 @@
+#!/bin/bash
+
+
+#dataset
+data=MTR_scm1d_outliers01
+
+
+#network model
+net_model=Linear
+
+#network dimensions
+m_dim=280
+m_prime=16
+
+
+
+
+job_name=SGD$net_model
+
+
+
+for batch in 8 
+do
+    for p in  1 1.5 2 -2
+    do
+        for lr in  0.000001
+         
+        do
+            for momentum in 0.9 
+            do
+                sbatch  -p ioannidis --mem 100g --job-name $job_name  MBO_script $data SGD  $net_model $m_dim $m_prime $batch $p $lr $momentum
+            done
+        done
+    done
+
+done
+
+
+
+

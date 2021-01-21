@@ -498,7 +498,7 @@ class OADM():
         """
         return self.regularizerCoeff / 2 * theta.frobeniusNormSq()
 
-    def updateTheta1viaSGD(self, A, b, c, coeff):
+    def _updateTheta1viaSGD(self, A, b, c, coeff):
 
         #get current model vraibales
         theta_VAR = self.model.getParameters(trackgrad=True)
@@ -529,34 +529,36 @@ class OADM():
             optimizer.step()
 
 
-    def runSGD(self, iterations = 100, logger = logging.getLogger('SGD'), debug = False):
+    def runSGD(self, iterations = 100, logger = logging.getLogger('SGD'), lr = 1e-2, momentum = 0.0, debug = False):
 
         logger.info("Starting SGD iterations.")
 
         #get current model vraibales
         theta_VAR = self.model.getParameters(trackgrad=True) 
 
+        
+
         #get current theta_k (i.e., model parameters)
         self.theta_k = self.model.getParameters() * 1
 
-        #NOTE: just need to be initialized (won't be used for running SGD!)
-        self.theta1 = self.model.getParameters() * 0
-        self.theta2 =  self.model.getParameters() * 0
-        self.dual = self.model.getParameters() * 0
+
+        #compute the objective around the anchor point theta_k
+        self.OBJ_theta_k = self.getGfunc( self.theta_k )
+
+        with torch.no_grad():
+            for data_i in self.data_loader:
+                self.OBJ_theta_k += torch.sum( torch.norm( self.model( data_i ), p = self.p, dim = 1)  ) / len( self.data )
 
 
-        #initialize thet_VAR to zero
-        for var_ind, var in enumerate( self.theta1 ):
-            theta_VAR[var_ind].data.copy_( var )
+        optimizer = torch.optim.SGD(theta_VAR, lr = lr, momentum = momentum)
 
-        optimizer = torch.optim.SGD(theta_VAR, lr=0.01, momentum=0.0)
-
-       # theta_VAR *= 0
 
         #keep track of trajectories
         trace = {'OBJ': [], 'time': []}
         t_start = time.time()
 
+        #get iterable dataloader 
+        iterableData = iter( self.data_loader )
 
         for k in range(iterations):
 
@@ -564,7 +566,11 @@ class OADM():
 
             loss = self.h / 2 * (theta_VAR - self.theta_k).frobeniusNormSq() +  self.getGfunc( theta_VAR )
 
-            data_batch = next( iter( self.data_loader ) )
+            #load a new data batch
+            try:
+                data_batch = next( iterableData )
+            except StopIteration:
+                iterableData = iter( self.data_loader )
 
             #get terms for running Inner ADMM 
             A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients( data_batch, quadratic = False )
@@ -572,21 +578,52 @@ class OADM():
             for ind, A_i in enumerate(A):
                 loss += torch.norm(self.model.vecMult(vec = theta_VAR,  Jacobian = A_i ) + b[ind] , p = self.p ) / self.batch_size
 
-        #    print(loss.item() )
             loss.backward()
 
             optimizer.step()
+            
+            if k % 10 == 0:
+                logger.info("{}-th iterations, loss is {:.4f}.".format(k, loss.item()))
  
             if debug:
                 OBJ = self.getObj(theta_VAR, theta_VAR)
 
                 logger.info("Full objective is {}".format( OBJ ) )
 
+
                 #keep trace
                 trace['OBJ'].append( OBJ )
                 trace['time'].append( time.time() - t_start )
 
-        return theta_VAR, trace 
+                if k == 0 or OBJ < BEST_loss:
+                    BEST_loss = OBJ
+                    BEST_var  = theta_VAR * 1 
+ 
+
+                #compute model improvement
+                model_improvement  = self.getModelImprovement( BEST_var )
+
+            else:
+
+                if k == 0 or loss.item() < BEST_loss:
+                    BEST_loss = loss.item()
+                    BEST_var  = self.model.getParameters() * 1
+
+                    #evaluate an estimation of model improvement 
+                    model_improvement = self.OBJ_theta_k - BEST_loss
+                
+
+        logger.info("Best computed objective is {:.4f}.".format( BEST_loss ) )
+
+
+        #NOTE: reset model variables (optimizer modifies model parameters)
+        self.model.setParameters( self.theta_k )
+
+        #set variables
+        self.theta_bar1 = BEST_var 
+       
+
+        return trace, model_improvement
         
 
     def run(self, iterations = 100, eps = 1.e-3, eval_full_model_freq = 0.05, inner_iterations = 500, inner_eps = 1e-3, logger = logging.getLogger('OADM'), adapt_parameters = True, debug = False, world_size = 1):
@@ -629,6 +666,9 @@ class OADM():
         DERS = eps + 1
         stoch_OBJ = 0.0   
 
+        #get iterable dataloader 
+        iterableData = iter( self.data_loader )
+
         #OADM iterations
         while k < iterations and (PRES > eps or DRES > eps):
             #start of iteration
@@ -640,7 +680,11 @@ class OADM():
                 self.gamma = self.regularizerCoeff * (k + 1)
 
             #load a new batch 
-            data_batch = next( iter( self.data_loader ) )
+            try:
+                data_batch = next( iterableData )
+
+            except StopIteration:
+                iterableData = iter( self.data_loader )
 
 
             #get terms for running Inner ADMM 

@@ -33,16 +33,17 @@ class AddNoiseDataset(Dataset):
 
 
         #add noise
-        for ind in range(len(self.data)):
-            if outliers_idx[ind] == 1:
-                self.data[ind] = self.noise_fn( self.data[ind] )
-                self.targets[ind] = self.noise_fn( self.targets[ind] )
+        if outliers_idx is not None:
+            for ind in range(len(self.data)):
+                if outliers_idx[ind] == 1:
+                    self.data[ind] = self.noise_fn( self.data[ind] )
+                    self.targets[ind] = self.noise_fn( self.targets[ind] )
 
                   
 
     def noise_fn(self, data_i, outlier_level = 1e1):
 
-        return data_i + randn(data_i.shape) + outlier_level
+        return data_i + torch.randn(data_i.shape) + outlier_level
 
     def __len__(self):
         return len(self.data)
@@ -102,6 +103,8 @@ if __name__=="__main__":
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     
     parser.add_argument("--outfile", type=str, help="Outfile")
+
+    parser.add_argument("--outfile_test",  type=str, help="Outfile for test dataset.")
     parser.add_argument("--problem_type", choices=['labeled', 'unlabeled'], default='unlabeled')
     args = parser.parse_args()
 
@@ -114,19 +117,36 @@ if __name__=="__main__":
     std_Targets =  torch.tensor( sklearn.preprocessing.scale(Targets, axis = 0), dtype=torch.float32 )
    
 
+    #set train/test sizes
+    train_size = int(0.8 * len(std_Data) )
+    test_size =  len(std_Data) - train_size
+
+    #split data
+    std_Data_train, std_Data_test = torch.split(std_Data, [train_size, test_size] )
+    std_Targets_train, std_Targets_test = torch.split(std_Targets,  [train_size, test_size] )
+
 
     #set outliers distribution
-    outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones( len( Data ) ) * args.outliers )
+    outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones(train_size ) * args.outliers )
 
     #sample outlier indices
     outliers_idx = outliers_indices_distr.sample()
 
-    #form dataset 
-    datasetWithOutliers = AddNoiseDataset( std_Data, std_Targets, outliers_idx = outliers_idx )
 
-    print(datasetWithOutliers[0])
-   
-    dumpFile(args.outfile, datasetWithOutliers)
+    
+
+    #form train dataset 
+    train_datasetWithOutliers = AddNoiseDataset( std_Data_train, std_Targets_train, outliers_idx = outliers_idx )
+  
+    #save train dataset
+    dumpFile(args.outfile, train_datasetWithOutliers)
+
+    if args.outliers == 0.0:
+        #form test dataset
+        test_datasetWithOutliers = AddNoiseDataset( std_Data_test, std_Targets_test )
+
+        #save test dataset
+        dumpFile(args.outfile_test, test_datasetWithOutliers)
 
     #Sampler
     #data_sampler  = torch.utils.data.distributed.DistributedSampler(my_dataset, rank=args.local_rank)

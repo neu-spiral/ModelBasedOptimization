@@ -152,14 +152,17 @@ class Network(nn.Module):
         """
         #return torch.cat( [parameter.view(-1) for parameter in self.parameters()] ).unsqueeze(0)
         if trackgrad:
-            outL = []
-            for param in self.parameters():
-                new_param = torch.zeros(param.size(), requires_grad=True, device = self.device)
+            #return self.parameters()
 
-                new_param.copy_( param.data )
-                outL.append( new_param )
+            return TensorList([param  for param in self.parameters()])
+            #outL = []
+            #for param in self.parameters():
+            #    new_param = torch.zeros(param.size(), requires_grad=True, device = self.device)
+#
+             #   new_param.copy_( param.data )
+             #   outL.append( new_param )
 
-            return TensorList( outL  )
+            #return TensorList( outL  )
         else:
             return TensorList([param.data  for param in self.parameters()])
 
@@ -357,7 +360,7 @@ class Network(nn.Module):
 
 class Linear(Network):
     "A class for shallow Linear models; the input size is m anbd the output size is m_prime."
-    def __init__(self, m , m_prime, hidden = 16, device=torch.device("cpu")):
+    def __init__(self, m , m_prime, hidden = 32, device=torch.device("cpu")):
         super(Linear, self).__init__(device)
         self.m = m
         self.m_prime = m_prime
@@ -535,19 +538,51 @@ if __name__ == "__main__":
     else:  
         dev = "cpu"  
 
-    device = torch.device(dev)
-
-    model = ConvAEC2(k_in = 1, k_h = 8, device = device)
-
-    X = torch.randn(1, 1 , 28, 28).to( device)
 
 
-    Y = model( X )
-
-    jac, sqjac = model.getJacobian(Y, quadratic = True)
+    model = AEC(m = 10, m_prime = 8)
 
 
-    print(sqjac.shape)
+
+
+
+    Vars = model.getParameters( True) 
+
+    print(Vars)
+
+    optimizer = torch.optim.SGD(Vars, lr=0.01, momentum=0.9)
+
+
+    init_vars = model.getParameters() * 1
+ 
+
+    F_out = model( torch.randn(5, 10) )
+
+
+
+    for _ in range(4):
+       
+        optimizer.zero_grad()
+
+        batch = torch.randn(5, 10)
+
+        out = model(batch)
+
+        loss = torch.sum( torch.norm(out, p = 2) )
+
+
+
+        loss.backward()
+
+        optimizer.step()
+
+        print(Vars)
+
+    model.setParameters( init_vars )
+
+
+
+
     #10 rows, 6 cols, embed size 3
 #    model  = MF(100, 6, 3)
 

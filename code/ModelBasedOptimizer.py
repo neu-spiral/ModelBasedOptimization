@@ -14,7 +14,7 @@ from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
 import torch.optim as optim
 from datasetGenetaor import labeledDataset, unlabeledDataset
-from Real_datasetGenetaor import dropLabelAddNoiseDataset
+from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers
 from MTRdatasetGen import AddNoiseDataset
 
 
@@ -71,6 +71,7 @@ class ModelBasedOptimzier:
         self.gamma = gamma
         self.rho = rho
         self.rho_inner = rho_inner
+        self.batch_size  = batch_size
 
 
         #initialize ADMM solver 
@@ -142,7 +143,7 @@ class ModelBasedOptimzier:
         return trace        
 
 
-    def runSGD(self, lr, iterations = 200, logger =  logging.getLogger('LSBBM'), debug = False):
+    def runSGD(self, lr, momentum=0.0, iterations = 200, logger =  logging.getLogger('LSBBM'), debug = False):
         """
             Solve the following problem via SGD:
                       Minimize 1/n ∑_i ||F_i(θ)||_p + G(θ).
@@ -151,28 +152,36 @@ class ModelBasedOptimzier:
         #get current model vraibales
         theta_VAR = self.model.getParameters( trackgrad=True )
 
-        optimizer = torch.optim.Adam(theta_VAR, lr = lr)#, momentum=0.9)
+        optimizer = torch.optim.SGD(theta_VAR, lr = lr, momentum = momentum)
 
         t_start = time.time()
 
         #keep track of trajectories
         trace = {'OBJ': [self.getObjective()], 'time': [time.time() - t_start]}
 
-        for _ in range(iterations):
+        iterableData = iter( self.data_loader ) 
+
+        logger.info("Objective initially is {:.4f}.".format( trace['OBJ'][0]) )
+  
+        for it in range(iterations):
 
             #add regulrization
-            loss = self.oadm_obj.getGfunc( theta_VAR )
+            loss = self.oadm_obj.getGfunc( theta_VAR ) 
 
             #load batch
-            data_i = next( iter( self.data_loader ) )
+            try:
+                data_i = next( iterableData )
+            except StopIteration:
+                iterableData = iter( self.data_loader )
 
             output = self.model( data_i )
+
                 
              #evaluate loss for the batch
             if self.p == -2:
-                loss += torch.sum( torch.norm(output, p = 2, dim = 1) ** 2 ) / data_i.shape[0] 
+                loss += torch.sum( torch.norm(output, p = 2, dim = 1) ** 2 ) / self.batch_size
             else:
-                loss +=  torch.sum( torch.norm(output, p = self.p, dim = 1)  ) / data_i.shape[0]
+                loss +=  torch.sum( torch.norm(output, p = self.p, dim = 1)  ) / self.batch_size
 
             #backward pass
             loss.backward()
@@ -184,12 +193,73 @@ class ModelBasedOptimzier:
                 #evaluate objective
                 OBJ = self.getObjective( theta_VAR )
 
-                logger.info("Objective is {:.4f}.".format( OBJ ) )
+                logger.info("{}-th iteration, objective is {:.4f}.".format( it, OBJ ) )
 
                 trace['OBJ'].append( OBJ.item() )
                 trace['time'].append( time.time() - t_start)
+
+                if it == 0 or OBJ < BEST_OBJ:
+                    #if objective improved recird the value and the current model parameter
+                    BEST_OBJ = OBJ
+                    BEST_theta_VAR = theta_VAR * 1.0
+                    
+                    
+                  
+        #set variable to the best generated 
+        self.model.setParameters( BEST_theta_VAR )
+
+        logger.info("Best objective value computed is {:.4f}.".format( BEST_OBJ ))
+ 
         return trace
     
+    @torch.no_grad()
+    def evalVariable(self):
+        """
+            Compute the objective:
+                  OBJ_non-outliers = ∑_{i∈D} || F_i(Theta) ||_p + g(theta),
+            where D is the set of non-outliers datapoints. Also compute the sum over outliers, i.e.,
+                  OBJ_outliers = ∑_{i∈[n]/D} || F_i(Theta) ||_p + g(theta),
+            where Theta is the current model parameters.
+            
+        """
+        #boolean array indicating outliers indices
+        outliers_ind = self.dataset.outliers_idx
+
+        OBJ_tot = self.oadm_obj.getGfunc( self.model.getParameters() * 1 )
+        OBJ_non_outliers = 0.0
+        OBJ_outliers = 0.0
+      
+        #pass through the dataset
+        for ind in range(  len( self.dataset  )  ):
+            #load data and add batch dimension
+            data_i = self.dataset[ ind ]
+
+
+            #NOTE: labeled data
+            if torch.is_tensor( data_i ):
+                data_i = torch.unsqueeze( data_i, 0)
+
+            else:
+                data_i = torch.unsqueeze( data_i[0], 0),  torch.unsqueeze( data_i[1], 0)
+
+
+            output = self.model( data_i ) 
+        
+
+            F_i = torch.squeeze( torch.norm(output, p = 2, dim = 1) )  ** 2 / len(self.dataset)
+       
+            OBJ_tot += F_i
+
+            if outliers_ind[ ind] == 1.0:
+                OBJ_outliers += F_i
+            else:
+                 OBJ_non_outliers += F_i
+
+        stats = {'TOT OBJ': OBJ_tot,
+                 'OUTLIERS OBJ': OBJ_outliers,
+                 'NON-OUTLIERS OBJ': OBJ_non_outliers}
+
+        return stats 
  
     @torch.no_grad()
     def getObjective(self, theta=None):
@@ -279,7 +349,7 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self, stopping_eps = 1.e-4, iterations = 20, innerIterations = 100, world_size = 1, l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
+    def run(self, stopping_eps = 1.e-4, iterations = 20, innerIterations = 100, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
         """
             Run the Line Search Baed Bregman Minmization Algorithm, where at each iteration the new desecnet direction found via calling the run method of oadm. Then step size is set via Armijo line search.
         """
@@ -297,11 +367,17 @@ class ModelBasedOptimzier:
         trace['time'] = [time.time() - t_start]
         
 
+        logger.info("Objective initially is {:.4f}.".format( trace['OBJ'][0]) )
+
         #main iterations
         for i in range(iterations):
             
             #find a dsecnt direction
-            oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, world_size = world_size, logger = logger, debug = debug)             
+            if innerSolver == 'OADM':
+                oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, world_size = world_size, logger = logger, debug = debug)             
+
+            elif innerSolver == 'SGD':
+                inner_sgd_trace, model_delta = self.oadm_obj.runSGD(iterations = innerIterations,  lr = inner_lr, momentum = inner_momentum, logger = logger, debug = debug)
      
             #update variable via Armijo line search
             OBJ = self.updateVariable(s_k = self.oadm_obj.theta_bar1, DELTA = model_delta)
@@ -320,8 +396,14 @@ class ModelBasedOptimzier:
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file", type=str)
+    parser.add_argument("--mode", choices=['MBO', 'SGD', 'EVAL'], default='MBO', help="Running mode, MBO runs the model-based optimizer and SGD runs stochastic gradient descent.")
+
+    parser.add_argument("--innerSolver", choices = ['OADM', 'SGD'], default = 'OADM', help = "Solver to use for solving inner problems.")
+
     parser.add_argument("--local_rank", type=int)
 
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate used for running off-the-shelf solvers." )
+    parser.add_argument("--momentum", type=float, default=0.,  help="Momentum parameter for running SGD optimizer.")
     parser.add_argument("--world_size", type=int, default=1, help="Number of processes to spawn for parallel computations, defaults to 1 (no parallelism).")
     parser.add_argument("--m_dim", type=int, default=10)
     parser.add_argument("--m_prime", type=int,  default=8)
@@ -336,7 +418,8 @@ if __name__=="__main__":
     parser.add_argument("--regularizerCoeff", type=float, default=1.0, help = "regularization coefficient")
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
-    parser.add_argument("--outfile", type=str, help="File to store model parameters.")
+    parser.add_argument("--statfile", help = "File to store statistics.")
+    parser.add_argument("--modelfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
     parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2'], default='ConvAEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
@@ -360,7 +443,6 @@ if __name__=="__main__":
     else:
         logFile = args.logfile
 
-    print(logFile)
     clearFile(logFile)
     fh = logging.FileHandler(logFile)
     fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
@@ -379,12 +461,10 @@ if __name__=="__main__":
     new_model = eval(args.net_model)
     model = new_model(args.m_dim, args.m_prime, device=device)
 
-    #model = Linear(args.m, args.m_prime)
 
     model = model.to(device)
 
     #load dataset 
-   # dataset =  torch.load(args.input_file)
     dataset = loadFile(args.input_file)
 
  
@@ -401,39 +481,60 @@ if __name__=="__main__":
 
     #oadm_solver.run( iterations = 1, world_size =3 )
     
-    #NOTE
-    #return
-    #print(ss)
-   ###########MBO############# 
+   ###########RUN############# 
 
-    MBO = ModelBasedOptimzier(dataset = dataset, model = model, rho = args.rho, rho_inner = args.rho_inner,  p = args.p, h = args.h, gamma = args.gamma, regularizerCoeff = args.regularizerCoeff, batch_size = args.batch_size, g_est = g_est)
+    MBO = ModelBasedOptimzier(dataset = dataset, 
+                              model = model, 
+                              rho = args.rho, 
+                              rho_inner = args.rho_inner,  
+                              p = args.p, 
+                              h = args.h, 
+                              gamma = args.gamma, 
+                              regularizerCoeff = args.regularizerCoeff, 
+                              batch_size = args.batch_size, 
+                              g_est = g_est)
 
-    #run the model based optimaizer
-    trace = MBO.run( iterations  = args.iterations, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger) 
 
-   #run sgd 
-    trace_SGD_lr3 = MBO.runSGD(lr = 1e-3, debug = True, logger = logger) 
 
-    trace_SGD_lr4 = MBO.runSGD(lr = 1e-4, debug = True, logger = logger)
+    if args.mode == 'EVAL':
+        model.loadStateDict( args.modelfile )
+        
 
-    trace_SGD_lr5 = MBO.runSGD(lr = 1e-5, debug = True, logger = logger)
+    else:
+        if args.mode == 'MBO':
+            #run the model based optimaizer
 
-    #save model parameters
- #   model.saveStateDict( args.outfile )
+            if args.innerSolver == "OADM":
+                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger) 
+
+            elif args.innerSolver == "SGD":
+                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, inner_lr = args.lr, inner_momentum = args.momentum, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger)
+
+        elif args.mode == 'SGD':
+            #run sgd 
+            trace = MBO.runSGD(iterations  = args.iterations, lr = args.lr, momentum = args.momentum, debug = True, logger = logger) 
+
+        #save trace 
+        with open(args.tracefile,'wb') as f:
+            pickle.dump(trace,  f)
+
+
+
+        if args.modelfile:
+            #save model parameters
+            model.saveStateDict( args.modelfile )
    
     
+    #evaluate 
+    stats = MBO.evalVariable()
 
-    with open(args.tracefile + "_sgd3",'wb') as f:
-        pickle.dump(trace_SGD_lr3,  f)
+    print( stats)
 
-    with open(args.tracefile + "_sgd4",'wb') as f:
-        pickle.dump(trace_SGD_lr4,  f)
+    #save stats
+    with open(args.statfile, 'wb') as f:
+        pickle.dump(stats, f)
 
-    with open(args.tracefile + "_sgd5",'wb') as f:
-        pickle.dump(trace_SGD_lr5,  f)
 
-    with open(args.tracefile + "_mbo",'wb') as f:
-        pickle.dump(trace,  f)
 
 
 

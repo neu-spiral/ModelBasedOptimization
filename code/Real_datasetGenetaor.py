@@ -33,11 +33,16 @@ class dropLabelAddNoiseDataset(Dataset):
         self.low = low
         self.high = high
 
+        #dataset with outliers
+        self.datasetWithOutliers = []
+
         #add noise
         for ind in range(len(self.dataset)):
             if outliers_idx[ind] == 1:
-                self.noise_fn( self.dataset[ind][0] )
+                self.datasetWithOutliers.append( self.noise_fn( self.dataset[ind][0] ) )
 
+            else:
+                self.datasetWithOutliers.append(  self.dataset[ind][0] )
 
     def noise_fn(self, img):
 
@@ -58,7 +63,26 @@ class dropLabelAddNoiseDataset(Dataset):
             idx = idx.tolist()
        
 
-        return self.dataset[idx][0]
+        return self.datasetWithOutliers[idx]
+
+
+class addOutliers(dropLabelAddNoiseDataset):
+    def __init__(self, dataset, outliers_idx = None, outliers_dataset = None):
+        self.outliers_dataset = outliers_dataset
+         
+        super().__init__(dataset, outliers_idx)
+
+    
+    def noise_fn(self, img):
+
+         outlier_data_ind = np.random.randint( low = 0, high= len( self.outliers_dataset ) - 1  )
+
+
+         outlier_img = torch.mean(self.outliers_dataset[outlier_data_ind][0], dim = 0, keepdim = True  )
+      
+         return img + outlier_img
+                
+
 
 def binaryNoise(img, threshold = 0.5, high = 1.0, low = 0.0):
     """
@@ -75,7 +99,8 @@ def binaryNoise(img, threshold = 0.5, high = 1.0, low = 0.0):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_name", type=str, default='MNIST', help="The name of the dataset to download")
+    parser.add_argument("dataset_name", type=str, help="The name of the dataset to download")
+    parser.add_argument("--outlier_dataset", default='CIFAR10', help="The name of the outlier dataset to download")
     parser.add_argument("--local_rank", type=int, default=None)
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     parser.add_argument("--data_dir", type=str, default='data/', help="Directory to download data")
@@ -84,40 +109,39 @@ if __name__=="__main__":
     args = parser.parse_args()
 
 
+    #transforms for dataset
     my_transform = transforms.Compose([transforms.ToTensor()] )   ##, transforms.Lambda(lambda img: binaryNoise(img, threshold = 0.4)) ] )#, transforms.Normalize((0.1307,), (0.3081,) )] )
 
     #Download data
     my_dataset_class = eval('datasets.' + args.dataset_name)
   
+    #create dataset
     dataset = my_dataset_class(args.data_dir, train=True, download=True, transform=my_transform)
 
 
+    #outlier dataset class
+    outlier_dataset_class = eval('datasets.' + args.outlier_dataset)
 
+    #create outliers dataset
+    outlier_dataset = outlier_dataset_class(args.data_dir,  train=True, download=True, transform = transforms.Compose([transforms.Resize(dataset[0][0].shape[-2:]), transforms.ToTensor()] ) )
+
+    #outliers distribution
     outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones( len(dataset ) ) * args.outliers )
 
+    #sample outliers indices
     outliers_idx = outliers_indices_distr.sample()
 
-    
-    datasetWithOutliers = dropLabelAddNoiseDataset( dataset, outliers_idx = outliers_idx )
+    #create dataset where data in outlier indices are corrupted by random samples from outlier dataset
+    datasetWithOutliers = addOutliers( dataset, outliers_idx = outliers_idx, outliers_dataset = outlier_dataset )
 
-    if args.local_rank != None:
-        torch.distributed.init_process_group(backend='gloo',
-                                         init_method='env://')
-   
+   ##NOTE: DEBUGGING###############
+    outlier_ind_samp  = 0
+    for i in range( len(outliers_idx) ):
+        if outliers_idx[i] == 1:
+            outlier_ind_samp = i
+    print(dataset[outlier_ind_samp][0] )
+    print(datasetWithOutliers[outlier_ind_samp] - dataset[outlier_ind_samp][0] )
+   #########################################
+
+    #save dataset
     dumpFile(args.outfile, datasetWithOutliers)
-
-    #Sampler
-    #data_sampler  = torch.utils.data.distributed.DistributedSampler(my_dataset, rank=args.local_rank)
-  #  my_dataset = loadFile(args.outfile)
-  #  data_loader = torch.utils.data.DataLoader(my_dataset,\
-  #                                        batch_size=1)
-                                         # shuffle=True
-    
-    
-
-    
-
-    
-
-    #add outliers
-  
