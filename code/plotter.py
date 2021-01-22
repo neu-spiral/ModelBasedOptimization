@@ -48,12 +48,18 @@ def whichKey( filename, keywords = {'admm':'admm'}, keys_ordered=None):
     
     
 
-def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normalize=False, lgd=True, log_bar=False):
-    def formVals(DICS_alg):
-        DICS_alg_keys_ordred = sorted(DICS_alg.keys())
-        out = [DICS_alg[key] for key in DICS_alg_keys_ordred]
-        labels =  DICS_alg_keys_ordred
+def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normalize=False, lgd=True, log_bar=False, DICS_alg_keys_ordred = None):
+    def formVals(DICS_alg, DICS_alg_keys_ordred = None):
+
+        if DICS_alg_keys_ordred is None:
+            DICS_alg_keys_ordred = sorted(DICS_alg.keys())
+
+        out = [DICS_alg[key] for key in DICS_alg_keys_ordred if key in DICS_alg]
+
+        labels =  [str(key) for key in DICS_alg_keys_ordred]
+
         return out, labels
+
     fig, ax = plt.subplots()
     fig.set_size_inches(20, 4)
     width = 1
@@ -70,13 +76,14 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
         plt.ylim([0,1.1])
         y_axis_label = "Normalized " + y_axis_label
 
-    plt.ylim([10,600]) 
-    for key  in DICS:
-        values, labels = formVals(DICS[key])
-        print(values)
+    for i, key  in enumerate(DICS):
+        values, labels = formVals(DICS[key], DICS_alg_keys_ordred)
+        print(values, labels, key)
     #    ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=alg,log=True)
+
         RECTS+= ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=key,log=log_bar)
-        i+=1
+
+    #legend 
     if lgd:
         LGD = ax.legend(ncol=len(DICS.keys() ), borderaxespad=0.,loc=3, bbox_to_anchor=(0., 1.02, 1., .102),fontsize=15,mode='expand')    
     else:
@@ -90,13 +97,14 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
     plt.yticks(fontsize = 18)
     plt.xlim([ind[0]-width,ind[-1]+len(DICS.keys() )*width])
         
-    fig_size = plt.rcParams["figure.figsize"]
+    print(outfile)
+
     if lgd:
-       # fig.savefig(outfile+".pdf",format='pdf', bbox_extra_artists=(LGD,), bbox_inches=Bbox(np.array([[0,0],[20,8]])) )
-        fig.savefig(outfile+".pdf",format='pdf', bbox_inches='tight')
+        fig.savefig(outfile+".pdf",format='pdf', bbox_extra_artists=(LGD,), bbox_inches='tight') 
+
     else:
         fig.savefig(outfile+".pdf",format='pdf', bbox_inches='tight' )
-    plt.show()    
+
 
 def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear'):
 

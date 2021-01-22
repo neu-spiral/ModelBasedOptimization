@@ -92,6 +92,13 @@ class ADAEC:
         #create anomaly variables
         self.S = [torch.zeros( self.N )] * self.dataset_size
 
+        #compute norm2 squared of the dataset
+        self.dataset_normSq = 0.0
+        for ind in range(len(dataset)):
+
+            self.dataset_normSq += torch.sum( dataset[ind] ** 2 )
+    
+
     @torch.no_grad()
     def removeAnomaly(self, dataset):
         """
@@ -117,17 +124,22 @@ class ADAEC:
 
     @torch.no_grad()
     def getObjective(self):
+        """
+            Compute and return the full objective function.
+        """
 
         obj = self.regularizerCoeff * self.theta.frobeniusNormSq()
 
-        for data in DataLoader(anomalyReducedDataset, batch_size = self.batch_size):
+        for data in DataLoader(self.anomalyReducedDataset, batch_size = self.batch_size):
             obj += torch.sum( torch.norm( self.model(data_batch), p = self.p) ) / len( anomalyReducedDataset )
 
         return obj
 
 
     def updateTheta(self, iterations = 100, logger = logging.getLogger('SGD'), debug = False):
-
+        """
+            Update and set Theta via running SGD.
+        """
 
         self.theta = self.model.getParameters(trackgrad = True)
 
@@ -138,7 +150,7 @@ class ADAEC:
         trace = {'OBJ': [], 'time': []}
         t_start = time.time()
 
-        DL =  DataLoader(anomalyReducedDataset, batch_size = self.batch_size)
+        DL =  DataLoader(self.anomalyReducedDataset, batch_size = self.batch_size)
 
         #iterable dataloader
         iterableData  = iter( DL)
@@ -182,42 +194,69 @@ class ADAEC:
                 1) set S_i :=  X_i - F(θ, L_i)
                 2) Update via proximal operators S := Prox(S)
         """
-       
+        reconstructedInst = []       
+        S = []
+
         for ind in range( len (self.S) ):
             #reconstructed sample for anomaly reduced dataset
-            reconstructedInst_ind = self.anomalyReducedDataset[ind] - self.model( anomalyReducedDataset[ind] )
+            reconstructedInst_ind = torch.flatten( self.anomalyReducedDataset[ind], start_dim = 0 ) - self.model( torch.unsqueeze(self.anomalyReducedDataset[ind], 0) )
+
+            reconstructedInst.append( reconstructedInst_ind )
           
             #set S (sparsity) to the difference between 
-            S[ind] = self.dataset[ind] - reconstructedInst_ind
+            S.append( torch.flatten(self.dataset[ind], start_dim = 0 )  - reconstructedInst_ind )
 
+
+
+        deltaS = []
 
         #apply proximal opartor
         for ind in range( len (self.S) ):
             if self.regularizer == 'ell1':
-                self.S[ind] = pNormProxOp(S[ind], self.regularizerCoeff, p = 1)
+                newS_ind = pNormProxOp(S[ind], self.regularizerCoeff, p = 1)
+
+                
 
             elif self.regularizer == 'ell21':
-                self.S[ind] = pNormProxOp(S[ind], self.regularizerCoeff, p = 2)
+                newS_ind = pNormProxOp(S[ind], self.regularizerCoeff, p = 2)
+           
+            print(newS_ind.shape)
+            deltaS.append( self.S[ind] - newS_ind )                
 
-    def run(self, iterations = 100, innerIterations = 500, logger = logger):
+            #set updated S values
+            self.S[ind] = newS_ind
+
+        return deltaS, reconstructedInst
+
+    def run(self, iterations = 100, innerIterations = 500, logger = logging.getLogger('ADAEC')):
     
         for k in range(iterations):
-            #subtract anomalys
+            t_st = time.time()
+
+            #subtract anomaly
             self.anomalyReducedDataset = self.removeAnomaly(self.dataset)
 
             #upate Theta via SGD
             self.updateTheta(iterations = innerIterations, logger = logger)
              
             #update S via prox-op.
-            self.updateS()
+            deltaS, reconstructedInst = self.updateS()
 
-            
-       
+            #add anomaly 
+            self.anomalyAddedDataset = self.addAnomaly( self.dataset )
 
-         
-             
-            
-         
+            #compute c1, c2 for checking convergence
+            c1 = 0
+            c2 = 0
+
+            for ind in range(len(self.dataset)):
+
+                c1 += torch.sum( deltaS[ind] ** 2) / self.dataset_normSq
+        
+                c2 += torch.sum( (torch.squeeze(self.anomalyAddedDataset[ind]) - reconstructedInst[ind] - self.S[ind]) ** 2 ) / self.dataset_normSq
+
+            logger.info("Iteration {} done in {}(s).".format(k, time.time() - t_st) )
+            logger.info("Convergence parameters, c1 and c2 are {:.4f} and {:.4f}, respectively.".format(c1, c2) )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -283,8 +322,10 @@ if __name__ == "__main__":
     p = args.p, 
     regularizer = args.regularizer) 
 
-    ADAEC_obj.updateTheta( 
-        iterations = args.inner_iterations,
+    #run alg. 
+    ADAEC_obj.run( 
+        iterations = args.iterations,
+        innerIterations = args.inner_iterations,
         logger = logger
          )
     

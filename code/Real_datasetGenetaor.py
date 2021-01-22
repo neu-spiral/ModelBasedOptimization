@@ -105,14 +105,14 @@ if __name__=="__main__":
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     parser.add_argument("--data_dir", type=str, default='data/', help="Directory to download data")
     parser.add_argument("--outfile", type=str, help="Outfile")
-    parser.add_argument("--type", choices=['train', 'test'], default='train')
+    parser.add_argument("--data_type", choices=['train', 'test'], default='train')
     args = parser.parse_args()
 
 
     #transforms for dataset
     my_transform = transforms.Compose([transforms.ToTensor()] )   ##, transforms.Lambda(lambda img: binaryNoise(img, threshold = 0.4)) ] )#, transforms.Normalize((0.1307,), (0.3081,) )] )
 
-    #Download data
+    #get dataset class
     my_dataset_class = eval('datasets.' + args.dataset_name)
   
     #create dataset
