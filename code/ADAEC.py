@@ -17,7 +17,7 @@ from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers
 from MTRdatasetGen import AddNoiseDataset
 
 
-class getDataset(Dataset):
+class reduceAnomaly(Dataset):
     """
         Return a dataset instance, where the current S matrix is subtracted from orginal values
     """
@@ -38,6 +38,20 @@ class getDataset(Dataset):
             return self.original_dataset[idx] - self.anomaly[idx]
         else:
             return self.original_dataset[idx][0] - self.anomaly[idx], self.original_dataset[idx][1]
+
+
+class addAnomaly(reduceAnomaly):
+
+    def __getitem__(self, idx):
+
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        if torch.is_tensor( self.original_dataset[idx] ):
+            return self.original_dataset[idx] + self.anomaly[idx]
+        else:
+            return self.original_dataset[idx][0] + self.anomaly[idx], self.original_dataset[idx][1]
+    
 
 
        
@@ -79,7 +93,7 @@ class ADAEC:
         self.S = [torch.zeros( self.N )] * self.dataset_size
 
     @torch.no_grad()
-    def removeAnomaly(self):
+    def removeAnomaly(self, dataset):
         """
             Subtract current anomalies (stored in S) and return a Dataset instance.
         """
@@ -87,13 +101,32 @@ class ADAEC:
         anomaly =  [torch.reshape(S_i, self.data_shape) for S_i in self.S] 
 
         #return dataset by subtracting anomalies
-        return  getDataset(self.dataset, anomaly)
+        return  reduceAnomaly(dataset, anomaly)
         
+
+    @torch.no_grad()
+    def addAnomaly(self, dataset):
+        """
+            Add current anomalies (stored in S) and return a Dataset instance.
+        """
+        #current anomaly
+        anomaly =  [torch.reshape(S_i, self.data_shape) for S_i in self.S]
+
+        #return dataset by subtracting anomalies
+        return  addAnomaly(dataset, anomaly)
+
+    @torch.no_grad()
+    def getObjective(self):
+
+        obj = self.regularizerCoeff * self.theta.frobeniusNormSq()
+
+        for data in DataLoader(anomalyReducedDataset, batch_size = self.batch_size):
+            obj += torch.sum( torch.norm( self.model(data_batch), p = self.p) ) / len( anomalyReducedDataset )
+
+        return obj
 
 
     def updateTheta(self, iterations = 100, logger = logging.getLogger('SGD'), debug = False):
-        #remove current anomalies from dataset
-        self.outlierReducedDataset = self.removeAnomaly()
 
 
         self.theta = self.model.getParameters(trackgrad = True)
@@ -105,7 +138,7 @@ class ADAEC:
         trace = {'OBJ': [], 'time': []}
         t_start = time.time()
 
-        DL =  DataLoader(outlierReducedDataset, batch_size = self.batch_size)
+        DL =  DataLoader(anomalyReducedDataset, batch_size = self.batch_size)
 
         #iterable dataloader
         iterableData  = iter( DL)
@@ -121,8 +154,9 @@ class ADAEC:
                 iterableData  = iter( DL)
 
 
+            
             #forward pass
-            loss = torch.sum( torch.norm( self.model(data_batch), p = self.p) )
+            loss = torch.sum( torch.norm( self.model(data_batch), p = self.p) ) / len( self.dataset ) + self.regularizerCoeff * self.theta.frobeniusNormSq()
 
             loss.backward()
 
@@ -150,30 +184,35 @@ class ADAEC:
         """
        
         for ind in range( len (self.S) ):
-            #reconstructed sample for outlier reduced dataset
-            reconstructedInst_ind = self.outlierReducedDataset[ind] - self.model( outlierReducedDataset[ind] )
+            #reconstructed sample for anomaly reduced dataset
+            reconstructedInst_ind = self.anomalyReducedDataset[ind] - self.model( anomalyReducedDataset[ind] )
           
             #set S (sparsity) to the difference between 
             S[ind] = self.dataset[ind] - reconstructedInst_ind
 
 
         #apply proximal opartor
-        if self.regularizer == 'ell1':
-            for ind in range( len (self.S) ):
+        for ind in range( len (self.S) ):
+            if self.regularizer == 'ell1':
                 self.S[ind] = pNormProxOp(S[ind], self.regularizerCoeff, p = 1)
 
-        elif self.regularizer == 'ell21':
-            for ind in range( len (self.S) ):
+            elif self.regularizer == 'ell21':
                 self.S[ind] = pNormProxOp(S[ind], self.regularizerCoeff, p = 2)
 
     def run(self, iterations = 100, innerIterations = 500, logger = logger):
     
         for k in range(iterations):
+            #subtract anomalys
+            self.anomalyReducedDataset = self.removeAnomaly(self.dataset)
+
+            #upate Theta via SGD
             self.updateTheta(iterations = innerIterations, logger = logger)
              
+            #update S via prox-op.
             self.updateS()
 
             
+       
 
          
              

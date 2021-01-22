@@ -328,6 +328,8 @@ class Network(nn.Module):
         out = []
         for Jacobian_i in Jacobian:
             out.append( Jacobian_i * vec )
+
+        #NOTE
         if trackgrad:
            return out
         
@@ -546,21 +548,26 @@ if __name__ == "__main__":
 
 
 
-    Vars = model.getParameters( True) 
+    Vars = model.getParameters() 
+   
 
-    print(Vars)
+    myVar = Vars * 1
 
-    optimizer = torch.optim.SGD(Vars, lr=0.01, momentum=0.9)
+    for var in myVar:
+        var.requires_grad = True
 
 
-    init_vars = model.getParameters() * 1
+    optimizer = torch.optim.SGD(myVar, lr=0.01, momentum=0.9)
+
+
  
 
     F_out = model( torch.randn(5, 10) )
 
 
+    print(myVar)
 
-    for _ in range(4):
+    for _ in range(1):
        
         optimizer.zero_grad()
 
@@ -568,17 +575,23 @@ if __name__ == "__main__":
 
         out = model(batch)
 
-        loss = torch.sum( torch.norm(out, p = 2) )
+        vec = torch.zeros( batch.shape[0])
+
+        for i in range( batch.shape[0] ):
+            vec[i] = torch.norm(out[i], p = 2)
+
+       # loss = torch.sum( torch.norm(out, p = 2) )
 
 
+        loss = torch.sum( vec )
 
+        print(loss.requires_grad)
         loss.backward()
 
         optimizer.step()
 
-        print(Vars)
+        print(myVar)
 
-    model.setParameters( init_vars )
 
 
 

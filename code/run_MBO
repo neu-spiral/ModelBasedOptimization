@@ -1,15 +1,13 @@
 #!/bin/bash
 
 
-#dataset
-data=MTR_scm1d_outliers00
 
 
 #network model
-net_model=Linear
+net_model=ConvAEC2
 
 #network dimensions
-m_dim=280
+m_dim=1
 m_prime=16
 
 
@@ -23,7 +21,8 @@ momentum=0.0
 
 batch=8
 
-for data in MTR_scm1d_outliers00 MTR_scm1d_outliers005 MTR_scm1d_outliers01
+#dataset
+for data in MNIST_CIFAR10outliers00 MNIST_CIFAR10outliers005 MNIST_CIFAR10outliers01
 do
 
     for p in 1 1.5 2

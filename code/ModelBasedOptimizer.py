@@ -165,8 +165,8 @@ class ModelBasedOptimzier:
   
         for it in range(iterations):
 
-            #add regulrization
-            loss = self.oadm_obj.getGfunc( theta_VAR ) 
+            #add regulrization 
+            loss = self.oadm_obj.getGfunc( theta_VAR )  
 
             #load batch
             try:
@@ -182,6 +182,7 @@ class ModelBasedOptimzier:
                 loss += torch.sum( torch.norm(output, p = 2, dim = 1) ** 2 ) / self.batch_size
             else:
                 loss +=  torch.sum( torch.norm(output, p = self.p, dim = 1)  ) / self.batch_size
+
 
             #backward pass
             loss.backward()
@@ -505,10 +506,10 @@ if __name__=="__main__":
             #run the model based optimaizer
 
             if args.innerSolver == "OADM":
-                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger) 
+                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger, debug = False) 
 
             elif args.innerSolver == "SGD":
-                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, inner_lr = args.lr, inner_momentum = args.momentum, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger)
+                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, inner_lr = args.lr, inner_momentum = args.momentum, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger, debug = False)
 
         elif args.mode == 'SGD':
             #run sgd 

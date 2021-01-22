@@ -1,15 +1,13 @@
 #!/bin/bash
 
 
-#dataset
-data=MTR_scm1d_outliers01
 
 
 #network model
-net_model=Linear
+net_model=ConvAEC2
 
 #network dimensions
-m_dim=280
+m_dim=1
 m_prime=16
 
 
@@ -18,16 +16,18 @@ m_prime=16
 job_name=MBOSGD$net_model
 
 
+batch=8
 
-for batch in 8 
+
+for data in MNIST_CIFAR10outliers00 MNIST_CIFAR10outliers005 MNIST_CIFAR10outliers01
 do
     for p in 1 1.5 2
     do
-        for lr in 0.000001 #0.0001 0.00001 0.000001
+        for lr in 0.001 0.0001 0.00001 0.000001
         do
-             for momentum in 0.9
+             for momentum in 0.0 0.9
              do
-                 sbatch -p ioannidis --mem 100g  --job-name $job_name MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
+                 sbatch -p ioannidis --mem 200g  --job-name $job_name MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
              done
         done
     done

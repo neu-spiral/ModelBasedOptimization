@@ -105,7 +105,7 @@ if __name__=="__main__":
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     parser.add_argument("--data_dir", type=str, default='data/', help="Directory to download data")
     parser.add_argument("--outfile", type=str, help="Outfile")
-    parser.add_argument("--problem_type", choices=['labeled', 'unlabeled'], default='unlabeled')
+    parser.add_argument("--type", choices=['train', 'test'], default='train')
     args = parser.parse_args()
 
 
@@ -116,7 +116,7 @@ if __name__=="__main__":
     my_dataset_class = eval('datasets.' + args.dataset_name)
   
     #create dataset
-    dataset = my_dataset_class(args.data_dir, train=True, download=True, transform=my_transform)
+    dataset = my_dataset_class(args.data_dir, train = args.data_type == 'train', download=True, transform=my_transform)
 
 
     #outlier dataset class

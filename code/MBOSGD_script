@@ -32,7 +32,7 @@ regularizerCoeff=1.0
 lr=$7
 momentum=$8
 
-iters=50
+iters=15
 inner_iterations=500
 
 innerSolver=SGD

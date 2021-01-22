@@ -106,6 +106,12 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
         #load trajectory
         data_dict = DICS[alg]
 
+        vals = [float(val) for val in data_dict.values()]
+
+        if alg == 'MBOSGD':
+            print(vals)
+        elif alg == 'MBO':
+            print(vals)
         #plot trajectory
         plt.plot(list( data_dict.keys() ), list( data_dict.values() ), lin_styles[i], label=alg, linewidth=3, markersize=18)
 
@@ -211,22 +217,24 @@ if __name__=="__main__":
     DICS = {}
     
    # keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
-   # keywords = {'MBO':'MBO', 'SGD_lr0.001':'SGD (lr=1e-3)', 'SGD_lr0.0001':'SGD (lr=1e-4)', 'SGD_lr0.00001':'SGD (lr=1e-5)'}
+    keywords = {'MBO':'MBO', '_SGD':'SGD', 'MBOSGD': 'MBOSGD'}
+    kw_ord = ['MBOSGD', '_SGD', 'MBO']
 
-    keywords = {}
-    for BS in ['8', '32', '128']:
-        for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
-            for momentum in ["0.0", "0.5", "0.9"]:
-                key = "BS{}_rho_inner5.0_SGD_lr{}_momentum{}".format(BS, lr, momentum)
+  #  keywords = {}
+  #  for BS in ['8', '32', '128']:
+  #      for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
+  #          for momentum in ["0.0", "0.5", "0.9"]:
+  #              key = "BS{}_rho_inner5.0_SGD_lr{}_momentum{}".format(BS, lr, momentum)
 
-                keywords[key] = "batch-size {}, lr {}, momentum {}".format(BS, lr, momentum)
+  #              keywords[key] = "batch-size {}, lr {}, momentum {}".format(BS, lr, momentum)
 
     max_dict = {}
 
     for filename in args.filenames:
 
         #find out file corresponds to which alg.
-        Alg  = whichKey(filename, keywords)
+        Alg  = whichKey(filename, keywords, kw_ord)
+
 
         with open(filename, 'rb') as current_file:
             trace  = pickle.load(current_file)

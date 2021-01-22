@@ -2,14 +2,14 @@
 
 
 #dataset
-data=MTR_scm1d_outliers01
+data=MNIST_CIFAR10outliers01
 
 
 #network model
-net_model=Linear
+net_model=ConvAEC2
 
 #network dimensions
-m_dim=280
+m_dim=1
 m_prime=16
 
 

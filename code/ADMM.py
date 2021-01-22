@@ -356,9 +356,14 @@ class OADM():
         A = []
 
             
+        #NOTE: labeled datasets
+        if type( data_batch ) == list:
+            data_batch_size = data_batch[0].shape[0]
+        else:
+            data_batch_size = data_batch.shape[0]
 
         #forward pass over the loaded batch
-        for ind in range(self.batch_size):
+        for ind in range(data_batch_size):
 
             #NOTE: labeld data
             if type( data_batch ) == list:
@@ -467,6 +472,7 @@ class OADM():
         A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients(data_batch, quadratic = False )        
 
 
+
         #backward propagation is not needed for the rest of computations
         with torch.no_grad():
             #add the anchoring and the regulrization terms
@@ -534,8 +540,11 @@ class OADM():
         logger.info("Starting SGD iterations.")
 
         #get current model vraibales
-        theta_VAR = self.model.getParameters(trackgrad=True) 
+        theta_VAR = self.model.getParameters()  * 1
 
+        #set trackgrad to True
+        for var in theta_VAR:
+            var.requires_grad = True
         
 
         #get current theta_k (i.e., model parameters)
@@ -564,19 +573,39 @@ class OADM():
 
             optimizer.zero_grad()
 
-            loss = self.h / 2 * (theta_VAR - self.theta_k).frobeniusNormSq() +  self.getGfunc( theta_VAR )
+            #quadratic loss plus regularization 
+            loss = self.h / 2 * (theta_VAR - self.theta_k).frobeniusNormSq() +  self.getGfunc( theta_VAR )  
+
 
             #load a new data batch
             try:
                 data_batch = next( iterableData )
+
             except StopIteration:
                 iterableData = iter( self.data_loader )
 
             #get terms for running Inner ADMM 
             A, sqA_sum, b, c, coeff, init_sol = self._getInnerADMMCoefficients( data_batch, quadratic = False )
+
      
             for ind, A_i in enumerate(A):
-                loss += torch.norm(self.model.vecMult(vec = theta_VAR,  Jacobian = A_i ) + b[ind] , p = self.p ) / self.batch_size
+                #NOTE: Norms are computed explictly as it seems that gradients do not flow through the vecMult method.
+
+                matVecProd = self.model.vecMult(vec = theta_VAR,  Jacobian = A_i,  trackgrad = True )
+
+                b_i = torch.squeeze( b[ind] )
+
+                for ind_p in range( len(matVecProd) ):
+                    
+                    if ind_p == 0:
+                        loss_inp_p = torch.abs(matVecProd[ind_p] + b_i[ind_p]) ** self.p
+                    else:
+                        loss_inp_p += torch.abs(matVecProd[ind_p] + b_i[ind_p]) ** self.p
+
+                loss_inp_p = loss_inp_p ** (1 / self.p) 
+
+                loss += loss_inp_p / self.batch_size 
+
 
             loss.backward()
 
@@ -607,7 +636,7 @@ class OADM():
 
                 if k == 0 or loss.item() < BEST_loss:
                     BEST_loss = loss.item()
-                    BEST_var  = self.model.getParameters() * 1
+                    BEST_var  = theta_VAR * 1
 
                     #evaluate an estimation of model improvement 
                     model_improvement = self.OBJ_theta_k - BEST_loss
@@ -616,8 +645,6 @@ class OADM():
         logger.info("Best computed objective is {:.4f}.".format( BEST_loss ) )
 
 
-        #NOTE: reset model variables (optimizer modifies model parameters)
-        self.model.setParameters( self.theta_k )
 
         #set variables
         self.theta_bar1 = BEST_var 
