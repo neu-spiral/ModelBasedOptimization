@@ -19,7 +19,7 @@ torch.manual_seed(1993)
 
 
 class AddNoiseDataset(Dataset):
-    def __init__(self, data, targets, outliers_idx = None, threshold = 0.5, high = 1.0, low = 0.0):
+    def __init__(self, data, targets, outliers_idx = None, outlier_bias = 0.0, outlier_var = 1.0):
         """
             Args:
                 dataset: A loaded dataset
@@ -28,6 +28,9 @@ class AddNoiseDataset(Dataset):
 
         self.data = data
         self.targets = targets
+
+        self.outlier_bias = outlier_bias
+        self.outlier_var = outlier_var
 
         self.outliers_idx = outliers_idx
 
@@ -41,9 +44,9 @@ class AddNoiseDataset(Dataset):
 
                   
 
-    def noise_fn(self, data_i, outlier_level = 1e1):
+    def noise_fn(self, data_i):
 
-        return data_i + torch.randn(data_i.shape) + outlier_level
+        return data_i + torch.randn(data_i.shape) * self.outlier_var + self.outlier_bias
 
     def __len__(self):
         return len(self.data)
@@ -102,10 +105,12 @@ if __name__=="__main__":
     parser.add_argument("target_size", type = int, help = "The size of target")
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     
+    parser.add_argument("--outlier_var", type=float, default=1.0, help="Variance of outliers" )
+    parser.add_argument("--outlier_bias", type=float, default=0.0, help="Bias of outliers." )
+
     parser.add_argument("--outfile", type=str, help="Outfile")
 
     parser.add_argument("--outfile_test",  type=str, help="Outfile for test dataset.")
-    parser.add_argument("--problem_type", choices=['labeled', 'unlabeled'], default='unlabeled')
     args = parser.parse_args()
 
 
@@ -136,7 +141,7 @@ if __name__=="__main__":
     
 
     #form train dataset 
-    train_datasetWithOutliers = AddNoiseDataset( std_Data_train, std_Targets_train, outliers_idx = outliers_idx )
+    train_datasetWithOutliers = AddNoiseDataset( std_Data_train, std_Targets_train, outliers_idx = outliers_idx, outlier_bias = args.outlier_bias, outlier_var = args.outlier_var )
   
     #save train dataset
     dumpFile(args.outfile, train_datasetWithOutliers)

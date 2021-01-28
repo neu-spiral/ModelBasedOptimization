@@ -89,7 +89,7 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
     else:
         LGD = None
     
-    ax.set_xticks(ind + width) 
+    ax.set_xticks(ind ) 
     ax.set_xticklabels(tuple(labels),fontsize = 18)
     ax.set_xlabel( x_axis_label, fontsize = 18 )
     ax.set_ylabel(y_axis_label,fontsize=18)
@@ -116,10 +116,7 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
 
         vals = [float(val) for val in data_dict.values()]
 
-        if alg == 'MBOSGD':
-            print(vals)
-        elif alg == 'MBO':
-            print(vals)
+        print(alg)
         #plot trajectory
         plt.plot(list( data_dict.keys() ), list( data_dict.values() ), lin_styles[i], label=alg, linewidth=3, markersize=18)
 
@@ -223,20 +220,26 @@ if __name__=="__main__":
     
     
     DICS = {}
-    
+    ##########HARD CODE#############################
    # keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
     keywords = {'MBO':'MBO', '_SGD':'SGD', 'MBOSGD': 'MBOSGD'}
     kw_ord = ['MBOSGD', '_SGD', 'MBO']
 
-  #  keywords = {}
-  #  for BS in ['8', '32', '128']:
-  #      for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
-  #          for momentum in ["0.0", "0.5", "0.9"]:
-  #              key = "BS{}_rho_inner5.0_SGD_lr{}_momentum{}".format(BS, lr, momentum)
+#    keywords = {}
+    
+  ##  for BS in ['8', '32', '128']:
+  #  for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
+  #      for momentum in ["0.0", "0.5", "0.9"]:
+  #          key = "MBOSGD_lr{}_momentum{}".format(lr, momentum)
 
-  #              keywords[key] = "batch-size {}, lr {}, momentum {}".format(BS, lr, momentum)
+  #          keywords[key] =  "lr {}, momentum {}".format(lr, momentum)
+  ##              key = "BS{}_rho_inner5.0_SGD_lr{}_momentum{}".format(BS, lr, momentum)
 
-    max_dict = {}
+  ##              keywords[key] = "batch-size {}, lr {}, momentum {}".format(BS, lr, momentum)
+
+   # kw_ord = keywords.keys()
+#####################################################
+    
 
     for filename in args.filenames:
 
@@ -263,5 +266,6 @@ if __name__=="__main__":
         else:
             y_axis_label = 'Time(s)'
 
+    print(DICS)
     #Plot 
     linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='linear', y_scale='linear') 

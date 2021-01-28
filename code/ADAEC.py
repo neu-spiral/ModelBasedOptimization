@@ -84,19 +84,29 @@ class ADAEC:
         #NOTE: handle labeled data
         if torch.is_tensor( self.dataset[0] ):
             self.data_shape = self.dataset[0].shape
+
+            #compute norm2 squared of the dataset
+            self.dataset_normSq = 0.0
+
+            for ind in range(len(dataset)):
+
+                self.dataset_normSq += torch.sum( dataset[ind] ** 2 )
+
         else:
             self.data_shape = self.dataset[0][0].shape
+
+            #compute norm2 squared of the dataset
+            self.dataset_normSq = 0.0
+
+            for ind in range(len(dataset)):
+
+                self.dataset_normSq += torch.sum( dataset[ind][0] ** 2 )
 
         self.N = np.prod( self.data_shape )
 
         #create anomaly variables
         self.S = [torch.zeros( self.N )] * self.dataset_size
 
-        #compute norm2 squared of the dataset
-        self.dataset_normSq = 0.0
-        for ind in range(len(dataset)):
-
-            self.dataset_normSq += torch.sum( dataset[ind] ** 2 )
     
 
     @torch.no_grad()
@@ -117,21 +127,25 @@ class ADAEC:
             Add current anomalies (stored in S) and return a Dataset instance.
         """
         #current anomaly
-        anomaly =  [torch.reshape(S_i, self.data_shape) for S_i in self.S]
 
         #return dataset by subtracting anomalies
-        return  addAnomaly(dataset, anomaly)
+        return  addAnomaly(dataset, self.S)
 
     @torch.no_grad()
-    def getObjective(self):
+    def getObjective(self, dataset = None):
         """
             Compute and return the full objective function.
         """
 
-        obj = self.regularizerCoeff * self.theta.frobeniusNormSq()
+        obj = self.regularizerCoeff / 2 * self.model.getParameters().frobeniusNormSq()
 
-        for data in DataLoader(self.anomalyReducedDataset, batch_size = self.batch_size):
-            obj += torch.sum( torch.norm( self.model(data_batch), p = self.p) ) / len( anomalyReducedDataset )
+        if dataset is None:
+            DL = DataLoader(self.dataset, batch_size = self.batch_size)
+        else:
+            DL = DataLoader(dataset, batch_size = self.batch_size)
+
+        for data_batch in DL:
+            obj += torch.sum( torch.norm( self.model(data_batch), dim = 1, p = self.p) ) / self.dataset_size
 
         return obj
 
@@ -168,18 +182,26 @@ class ADAEC:
 
             
             #forward pass
-            loss = torch.sum( torch.norm( self.model(data_batch), p = self.p) ) / len( self.dataset ) + self.regularizerCoeff * self.theta.frobeniusNormSq()
+            if self.p == -2:
+                loss = torch.sum( torch.norm( self.model(data_batch), dim = 1, p = 2) ** 2 ) / self.batch_size  + self.regularizerCoeff / 2 * self.theta.frobeniusNormSq() 
+            else:
+                loss = torch.sum( torch.norm( self.model(data_batch), dim = 1, p = self.p) ) / self.batch_size  + self.regularizerCoeff / 2* self.theta.frobeniusNormSq()
+
+           
 
             loss.backward()
 
             self.optimizer.step() 
 
        
-            if k % 1 == 0:
-                logger.info("{}-th iteration of SGD, loss is {:.4f}.".format(k, loss.item() ) )
+            OBJ = self.getObjective( self.anomalyReducedDataset )
 
-            if k == 0 or loss < BEST_loss:
-                BEST_loss = loss
+            if k % 20 == 0:
+
+                logger.info("{}-th iteration of SGD, the objective is {:.4f}.".format(k, OBJ ) )
+
+            if k == 0 or OBJ < BEST_Obj:
+                BEST_Obj = OBJ
                 BEST_var = self.theta * 1
 
 
@@ -195,7 +217,8 @@ class ADAEC:
                 2) Update via proximal operators S := Prox(S)
         """
         reconstructedInst = []       
-        S = []
+
+        deltaS = []
 
         for ind in range( len (self.S) ):
             #reconstructed sample for anomaly reduced dataset
@@ -204,46 +227,53 @@ class ADAEC:
             reconstructedInst.append( reconstructedInst_ind )
           
             #set S (sparsity) to the difference between 
-            S.append( torch.flatten(self.dataset[ind], start_dim = 0 )  - reconstructedInst_ind )
+            newS_ind =  torch.flatten(self.dataset[ind], start_dim = 0 )  - reconstructedInst_ind 
 
-
-
-        deltaS = []
-
-        #apply proximal opartor
-        for ind in range( len (self.S) ):
+            #apply prox. operator
             if self.regularizer == 'ell1':
-                newS_ind = pNormProxOp(S[ind], self.regularizerCoeff, p = 1)
-
+                newS_ind_po = pNormProxOp(newS_ind, self.regularizerCoeff, p = 1)
                 
 
             elif self.regularizer == 'ell21':
-                newS_ind = pNormProxOp(S[ind], self.regularizerCoeff, p = 2)
+                newS_ind_po = pNormProxOp(newS_ind, self.regularizerCoeff, p = 2)
            
-            print(newS_ind.shape)
-            deltaS.append( self.S[ind] - newS_ind )                
+            #drop the batch dim
+            newS_ind_po = torch.squeeze(newS_ind_po, 0)
+
+            #compute changes in S
+            deltaS.append(  newS_ind_po - newS_ind )                
 
             #set updated S values
-            self.S[ind] = newS_ind
+            self.S[ind] = newS_ind_po
 
         return deltaS, reconstructedInst
 
     def run(self, iterations = 100, innerIterations = 500, logger = logging.getLogger('ADAEC')):
+        t_st = time.time()
+
+        self.anomalyAddedDataset = self.dataset
+
+
     
+        trace = {'time': [time.time() - t_st], 'OBJ': [self.getObjective() ]}
+
+        logger.info("Objective initially is {:.4f}.".format( trace['OBJ'][0]) )
+
         for k in range(iterations):
             t_st = time.time()
 
             #subtract anomaly
             self.anomalyReducedDataset = self.removeAnomaly(self.dataset)
 
+            
             #upate Theta via SGD
             self.updateTheta(iterations = innerIterations, logger = logger)
-             
+            
             #update S via prox-op.
             deltaS, reconstructedInst = self.updateS()
 
-            #add anomaly 
-            self.anomalyAddedDataset = self.addAnomaly( self.dataset )
+            #compute objective 
+            Obj = self.getObjective()
 
             #compute c1, c2 for checking convergence
             c1 = 0
@@ -253,10 +283,18 @@ class ADAEC:
 
                 c1 += torch.sum( deltaS[ind] ** 2) / self.dataset_normSq
         
-                c2 += torch.sum( (torch.squeeze(self.anomalyAddedDataset[ind]) - reconstructedInst[ind] - self.S[ind]) ** 2 ) / self.dataset_normSq
+                c2 += torch.sum( (torch.flatten(self.dataset[ind], start_dim = 0) - reconstructedInst[ind] - self.S[ind]) ** 2 ) / self.dataset_normSq
+
+            self.anomalyAddedDataset =  self.addAnomaly( reconstructedInst )
+
+            trace['OBJ'].append( Obj )
+            trace['time'].append( time.time() - t_st )
+
 
             logger.info("Iteration {} done in {}(s).".format(k, time.time() - t_st) )
-            logger.info("Convergence parameters, c1 and c2 are {:.4f} and {:.4f}, respectively.".format(c1, c2) )
+            logger.info("Objective and Convergence parameters, c1 and c2 are {:.4f}, {:.4f} and {:.4f}, respectively.".format(Obj, c1, c2) )
+
+        return trace
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -267,14 +305,14 @@ if __name__ == "__main__":
     parser.add_argument("--logfile", type=str,default="logfiles/proc")
     parser.add_argument("--batch_size", type=int, default=4, help="batch size for processing dataset, when None it is set equal to the dataset size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate used for running off-the-shelf solvers." )
+    parser.add_argument("--momentum",  type=float, default=9e-1, help="Momentum used for running off-the-shelf solvers.")
     parser.add_argument("--iterations", type=int,  default=50)
     parser.add_argument("--inner_iterations", type=int,  default=500)
     parser.add_argument("--rho", type=float, default=1.0, help="rho parameter in ADMM")
-    parser.add_argument("--regularizer", choices = ['ell1', 'ell2', 'ell21'], default = 'ell1', help="Regularizer function.")
+    parser.add_argument("--regularizer", choices = ['ell1', 'ell21'], default = 'ell1', help="Regularizer function.")
     parser.add_argument("--regularizerCoeff", type=float, default=1.0, help = "regularization coefficient")
     parser.add_argument("--p", type=float, default=2, help="p in lp-norm")
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
-    parser.add_argument("--statfile", help = "File to store statistics.")
     parser.add_argument("--modelfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
     parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2'], default='ConvAEC')
@@ -312,21 +350,28 @@ if __name__ == "__main__":
     #load dataset 
     dataset = loadFile(args.input_file)
 
-    
+
     ADAEC_obj = ADAEC(dataset = dataset, 
     model = model, 
     batch_size = args.batch_size, 
     lr = args.lr, 
-    momentum = 0.9, 
+    momentum = args.momentum, 
     regularizerCoeff = args.regularizerCoeff,
     p = args.p, 
     regularizer = args.regularizer) 
 
     #run alg. 
-    ADAEC_obj.run( 
+    trace = ADAEC_obj.run( 
         iterations = args.iterations,
         innerIterations = args.inner_iterations,
         logger = logger
          )
     
 
+    #save trace 
+    with open(args.tracefile,'wb') as f:
+        pickle.dump(trace,  f)
+
+
+    #save model parameters
+    model.saveStateDict( args.modelfile ) 

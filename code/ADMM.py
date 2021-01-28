@@ -18,7 +18,7 @@ import math
 
 #@torch.no_grad()
 class InnerADMM():
-    def __init__(self, A, sqA, b, c, coeff, p, model, init_solution = None, rho_inner = 1.0):
+    def __init__(self, A, sqA, b, c, coeff, p, model, init_solution = None, rho_inner = 1.0, device = torch.device('cpu')):
         """
             A class that implements ADMM for generic problems of the form:
 
@@ -44,6 +44,7 @@ class InnerADMM():
         self.coeff = coeff
 
         self.model = model
+        self.device = device 
 
         self.rho_inner = rho_inner
         self.p = p
@@ -76,12 +77,15 @@ class InnerADMM():
     @torch.no_grad()
     def run(self, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
 
+        t_st = time.time()
+
         #compute the second order term in computing x 
-        seqcon_ord_term = 2 * self.coeff * torch.eye( self.sqA.shape[0] )  + self.rho_inner * self.sqA 
+        seqcon_ord_term = 2 * self.coeff * torch.eye( self.sqA.shape[0] ).to( self.device )  + self.rho_inner * self.sqA 
 
         #compute the inverse of the second order term
         seqcon_ord_term_inv = torch.inverse( seqcon_ord_term )
         
+        logger.info("Computed the inverse of the second term in {:.4f}(s)".format(time.time() - t_st ) )
     
         for k in range(iterations):
             t_st = time.time() 
@@ -142,7 +146,7 @@ class InnerADMM():
             OBJ += self.coeff * (self.x - self.c).frobeniusNormSq()
 
             if debug:
-                logger.info("{}-th iterations of Inner ADMM done in {:.2f}.".format(k, time.time() - t_st) )
+                logger.info("{}-th iteration of Inner ADMM done in {:.2f}.".format(k, time.time() - t_st) )
                 logger.info("Objective is {} and primal and dual residuals are {} and {}, respectively.".format(OBJ, PRES, DRES) )
 
             if PRES <= eps and DRES <= eps:
@@ -301,7 +305,7 @@ class ParInnerADMM(InnerADMM):
         return self.x
 
 class OADM():
-    def __init__(self, data, model, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, rho_inner = 1.0,  batch_size = 8):
+    def __init__(self, data, model, rho=1.0, p=2, h=1.0, gamma=1.0, regularizerCoeff=1.0, rho_inner = 1.0,  batch_size = 8, device = torch.device('cpu')):
         """
              A class that implements OADM algrotithm for solving problems of the form:
 
@@ -337,6 +341,7 @@ class OADM():
 
         self.data_loader = DataLoader(data, batch_size = batch_size, shuffle = True)
 
+        self.device = device
  
         #initialize optimization variables 
         self.theta1 = self.model.getParameters() * 0
@@ -388,7 +393,6 @@ class OADM():
 
             #compute A and b
             with torch.no_grad():
-
                 b.append(  F_i - self.model.vecMult( vec = self.theta_k, Jacobian = D_i ) )
                 
                 A.append( D_i )
@@ -556,6 +560,14 @@ class OADM():
 
         with torch.no_grad():
             for data_i in self.data_loader:
+                #transfer to device 
+                if torch.is_tensor( data_i ):
+                    data_i = data_i.to( self.device )
+
+                else:
+                    data_i[0] = data_i[0].to( self.device )
+                    data_i[1] = data_i[1].to( self.device )
+
                 self.OBJ_theta_k += torch.sum( torch.norm( self.model( data_i ), p = self.p, dim = 1)  ) / len( self.data )
 
 
@@ -580,6 +592,14 @@ class OADM():
             #load a new data batch
             try:
                 data_batch = next( iterableData )
+
+                #transfer to device
+                if torch.is_tensor( data_batch ):
+                    data_batch = data_batch.to( self.device )
+                else:
+                    data_batch[0] = data_batch[0].to( self.device )
+                    data_batch[1] = data_batch[1].to( self.device )
+
 
             except StopIteration:
                 iterableData = iter( self.data_loader )
@@ -612,7 +632,7 @@ class OADM():
             optimizer.step()
             
             if k % 10 == 0:
-                logger.info("{}-th iterations, loss is {:.4f}.".format(k, loss.item()))
+                logger.info("{}-th iteration, loss is {:.4f}.".format(k, loss.item()))
  
             if debug:
                 OBJ = self.getObj(theta_VAR, theta_VAR)
@@ -679,6 +699,13 @@ class OADM():
         self.OBJ_theta_k = self.getGfunc( self.theta_k )
 
         for data_i in self.data_loader:
+            #move data to device
+            if torch.is_tensor( data_i ):
+                data_i = data_i.to( self.device )
+            else:
+                data_i[0] = data_i[0].to( self.device )
+                data_i[1] = data_i[1].to( self.device )
+ 
             self.OBJ_theta_k += torch.sum( torch.norm( self.model( data_i ), p = self.p, dim = 1)  ) / len( self.data )
 
         #keep track of trajectories
@@ -710,6 +737,13 @@ class OADM():
             try:
                 data_batch = next( iterableData )
 
+                #move to device
+                if torch.is_tensor( data_batch ):
+                    data_batch = data_batch.to( self.device )
+                else:
+                    data_batch[0] = data_batch[0].to( self.device )
+                    data_batch[1] = data_batch[1].to( self.device )
+
             except StopIteration:
                 iterableData = iter( self.data_loader )
 
@@ -726,7 +760,7 @@ class OADM():
 
                 #inner admm initialization 
                 if world_size == 1:
-                    InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = self.rho_inner)
+                    InnerADMM_obj = InnerADMM(A = A, sqA = sqA_sum, b = b, c = c, coeff = coeff, p = self.p, model = self.model, init_solution = init_sol, rho_inner = self.rho_inner, device = self.device)
  
                     #update theta1 via InnerADMM
                     self.theta1 = InnerADMM_obj.run( iterations = inner_iterations, eps = inner_eps, logger = logger)
@@ -771,10 +805,14 @@ class OADM():
             #evaluate an estimation of model improvement 
             model_improvement = self.OBJ_theta_k - stoch_OBJ / (k + 1)
 
-            logger.info("{}-th iterations of OADM is done in {:.1f} (s), PRES and DRES are {:.4f} and {:.4f}, respectively.".format(k, time.time() - t_start_it, PRES, DRES ) )
+            logger.info("{}-th iteration of OADM is done in {:.1f} (s), PRES and DRES are {:.4f} and {:.4f}, respectively.".format(k, time.time() - t_start_it, PRES, DRES ) )
             logger.info("Infeasibility for average thetas is {:.4f}, avaraged objective value is {:.4f}".format( FEAS, stoch_OBJ / (k + 1) ) )
             logger.info("Model improvement is {:.4f}.".format( model_improvement ) )
   
+            #NOTE: if the estimated model improvement is negative set it to zero to prevent MBO from deteriorating. 
+            if model_improvement < 0.:
+                model_improvement = 0.0
+
             if debug:
 
                 #compute the full objective
@@ -797,6 +835,7 @@ class OADM():
             #increment k
             k += 1    
 
+        logger.info("Final Model improvement is {:.4f}.".format( model_improvement ) )
         return trace, model_improvement
     
     def getModelImprovement(self, theta_var):

@@ -4,16 +4,15 @@
 
 
 #network model
-net_model=ConvAEC2
+net_model=Linear
 
 #network dimensions
-m_dim=1
+m_dim=280
 m_prime=16
 
 
 
 
-job_name=$net_model
 
 lr=0.001
 momentum=0.0
@@ -22,12 +21,12 @@ momentum=0.0
 batch=8
 
 #dataset
-for data in MNIST_CIFAR10outliers00 MNIST_CIFAR10outliers005 MNIST_CIFAR10outliers01
+for data in MTR_scm1d_outliers00_b100v10 MTR_scm1d_outliers005_b100v10 MTR_scm1d_outliers01_b100v10
 do
 
     for p in 1 1.5 2
     do
-         sbatch -p ioannidis --mem 100g  --job-name $job_name MBO_script $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum
+         sbatch --partition ioannidis --mem 200g  --time 6-00:00:00 --job-name MBO$data  MBO_script $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum
     done
 done
 

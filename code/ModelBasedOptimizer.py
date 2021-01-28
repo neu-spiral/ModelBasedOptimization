@@ -27,7 +27,7 @@ class ModelBasedOptimzier:
        via the model based method proposed by Ochs et al. in 2018. 
     """
 
-    def __init__(self, dataset, model, rho=1.0, rho_inner = 1.0,  p=2, h=1.0, gamma=1.0, regularizerCoeff = 0.5, batch_size = 4, g_est=None, rank = None):
+    def __init__(self, dataset, model, rho=1.0, rho_inner = 1.0,  p=2, h=1.0, gamma=1.0, regularizerCoeff = 0.5, batch_size = 4, g_est=None, rank = None, device = torch.device("cpu")):
         #If rank is None the execution is serial. 
         self.rank = rank
 
@@ -45,17 +45,12 @@ class ModelBasedOptimzier:
         #estimator for g function (used in runADMM)
         self.g_est = g_est
 
-        #Check if GPU is available 
-        if torch.cuda.is_available():
-            device = torch.device("cuda:{}".format(0))
-        else:
-            device = torch.device("cpu")
       
+        self.device =  device
 
         #Create the model (for loss function)
-        self.model = model
-        #**
-        self.model = self.model.to(device)
+        self.model = model.to(device)
+
         #Synch model parameters across processes
         self._synchParameters()
          
@@ -75,7 +70,7 @@ class ModelBasedOptimzier:
 
 
         #initialize ADMM solver 
-        self.oadm_obj = OADM(data = dataset, model = self.model, rho = self.rho, p = self.p, h = self.h, gamma = self.gamma, regularizerCoeff = self.regularizerCoeff, rho_inner = self.rho_inner,  batch_size = batch_size)
+        self.oadm_obj = OADM(data = dataset, model = self.model, rho = self.rho, p = self.p, h = self.h, gamma = self.gamma, regularizerCoeff = self.regularizerCoeff, rho_inner = self.rho_inner,  batch_size = batch_size, device = self.device )
 
     @torch.no_grad()
     def _synchParameters(self):
@@ -283,6 +278,14 @@ class ModelBasedOptimzier:
         #pass through the dataset
         for data_i in self.data_loader:
 
+            #transefr to device 
+            if torch.is_tensor( data_i ):
+                data_i = data_i.to( self.device )
+
+            else:
+                data_i[0] = data_i[0].to( self.device )
+                data_i[1] = data_i[1].to( self.device )
+
             output = self.model( data_i )
 
             if self.p == -2:
@@ -315,6 +318,7 @@ class ModelBasedOptimzier:
 
         last = time.time()
 
+        stop = False
    
         #mult by 1 to make sure that theta_k is not pointing to the paramaters of the model (o.w. modifying model parameters, would modify theta_k too!)
         theta_k = self.model.getParameters() * 1
@@ -344,7 +348,13 @@ class ModelBasedOptimzier:
         now = time.time()
         logger.debug('New step-size found and parameter updated in {0:.2f}(s).'.format(now - last) )
 
-        return obj_new             
+        #if objective did not improve stop
+        if obj_new >=  obj_k:
+            obj_new = self.getObjective( theta_k )
+
+            stop = True
+
+        return obj_new, stop             
         
          
     
@@ -381,7 +391,7 @@ class ModelBasedOptimzier:
                 inner_sgd_trace, model_delta = self.oadm_obj.runSGD(iterations = innerIterations,  lr = inner_lr, momentum = inner_momentum, logger = logger, debug = debug)
      
             #update variable via Armijo line search
-            OBJ = self.updateVariable(s_k = self.oadm_obj.theta_bar1, DELTA = model_delta)
+            OBJ, stop = self.updateVariable(s_k = self.oadm_obj.theta_bar1, DELTA = model_delta)
                
      
             #log stats
@@ -391,6 +401,9 @@ class ModelBasedOptimzier:
             #add to trace
             trace['OBJ'].append( OBJ )
             trace['time'].append( time.time() - t_start )
+
+            if stop:
+                break
 
         return trace
 
@@ -457,16 +470,17 @@ if __name__=="__main__":
         device = torch.device("cuda:{}".format(0))
     else:
         device = torch.device("cpu")
+
     
     #initialize model
     new_model = eval(args.net_model)
     model = new_model(args.m_dim, args.m_prime, device=device)
 
 
-    model = model.to(device)
 
     #load dataset 
     dataset = loadFile(args.input_file)
+
 
  
     #estimate g function
@@ -493,7 +507,9 @@ if __name__=="__main__":
                               gamma = args.gamma, 
                               regularizerCoeff = args.regularizerCoeff, 
                               batch_size = args.batch_size, 
-                              g_est = g_est)
+                              g_est = g_est,
+                              device = device
+                               )
 
 
 

@@ -1,8 +1,6 @@
 #!/bin/bash
 
 
-#dataset
-data=MNIST_CIFAR10outliers01
 
 
 #network model
@@ -15,11 +13,10 @@ m_prime=16
 
 
 
-job_name=SGD$net_model
 
+batch=8
 
-
-for batch in 8 
+for data in MNIST_CIFAR10outliers00 MNIST_CIFAR10outliers005 MNIST_CIFAR10outliers01  
 do
     for p in  1 1.5 2 -2
     do
@@ -28,7 +25,7 @@ do
         do
             for momentum in 0.9 
             do
-                sbatch  -p ioannidis --mem 100g --job-name $job_name  MBO_script $data SGD  $net_model $m_dim $m_prime $batch $p $lr $momentum
+                sbatch  -p ioannidis --mem 200g --job-name SGD$data  --time 6-00:00:00 MBO_script $data SGD  $net_model $m_dim $m_prime $batch $p $lr $momentum
             done
         done
     done

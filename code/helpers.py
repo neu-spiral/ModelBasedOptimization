@@ -53,6 +53,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
 
     t_start = time.time()
     b_size, data_size = V.size()
+
     if b_size != 1:
         raise Exception('V must has a batch dimenstion of one.')
     V = V.squeeze(0)

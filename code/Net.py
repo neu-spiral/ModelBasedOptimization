@@ -203,11 +203,12 @@ class Network(nn.Module):
           evaluated for output
         """
         #Compute the i-th column in the Jacobian matrix, i.e., the grdaient of the i-th neuron in the output layer w.r.t. model parameters
-        selctor = np.zeros( output.size()[-1]  )
-        selctor[i] = 1
-        selector = torch.tensor( selctor  )
+        selector = torch.zeros( output.size()[-1]  )
+        selector[i] = 1
+        #selector = torch.tensor( selctor  )
         selector =  selector.view(1, -1)
         selector = selector.to(self.device) 
+
         #Reset gradients to zero
         self.zero_grad()
 
@@ -333,7 +334,7 @@ class Network(nn.Module):
         if trackgrad:
            return out
         
-        out =  torch.tensor( out).unsqueeze(0)
+        out =  torch.tensor( out).unsqueeze(0).to( self.device )
         return out
 
                     
@@ -540,57 +541,21 @@ if __name__ == "__main__":
     else:  
         dev = "cpu"  
 
+    device = torch.device(dev) 
+
+    model = AEC(m = 10, m_prime = 8, device = device)
+
+    X = torch.randn(1, 10).to( device )
+
+    model = model.to(device)
 
 
-    model = AEC(m = 10, m_prime = 8)
+    theta = model.getParameters( True )
+    
+
+    print( theta * 2)
 
 
-
-
-
-    Vars = model.getParameters() 
-   
-
-    myVar = Vars * 1
-
-    for var in myVar:
-        var.requires_grad = True
-
-
-    optimizer = torch.optim.SGD(myVar, lr=0.01, momentum=0.9)
-
-
- 
-
-    F_out = model( torch.randn(5, 10) )
-
-
-    print(myVar)
-
-    for _ in range(1):
-       
-        optimizer.zero_grad()
-
-        batch = torch.randn(5, 10)
-
-        out = model(batch)
-
-        vec = torch.zeros( batch.shape[0])
-
-        for i in range( batch.shape[0] ):
-            vec[i] = torch.norm(out[i], p = 2)
-
-       # loss = torch.sum( torch.norm(out, p = 2) )
-
-
-        loss = torch.sum( vec )
-
-        print(loss.requires_grad)
-        loss.backward()
-
-        optimizer.step()
-
-        print(myVar)
 
 
 

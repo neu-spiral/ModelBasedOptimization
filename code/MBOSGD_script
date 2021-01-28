@@ -26,19 +26,19 @@ p=$6
 rho=1.0
 rho_inner=5.0
 h=1.0
-regularizerCoeff=1.0
+regularizerCoeff=0.001
 
 
 lr=$7
 momentum=$8
 
-iters=15
+iters=20
 inner_iterations=500
 
 innerSolver=SGD
 
 #running args
-run_args=$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_rho_inner"$rho_inner"_"$mode$innerSolver"_lr"$lr"_momentum"$momentum
+run_args=$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_rho_inner"$rho_inner"_regulraization"$regularizerCoeff"_"$mode$innerSolver"_lr"$lr"_momentum"$momentum
 
 echo $run_args
         

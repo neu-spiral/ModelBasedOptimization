@@ -4,30 +4,29 @@
 
 
 #network model
-net_model=ConvAEC2
+net_model=Linear
 
 #network dimensions
-m_dim=1
+m_dim=280
 m_prime=16
 
 
 
 
-job_name=MBOSGD$net_model
 
 
 batch=8
 
 
-for data in MNIST_CIFAR10outliers00 MNIST_CIFAR10outliers005 MNIST_CIFAR10outliers01
+for data in MTR_scm1doutliers00 MTR_scm1doutliers005 MTR_scm1doutliers01
 do
-    for p in 1 1.5 2
+    for p in 1 1.5  2
     do
-        for lr in 0.001 0.0001 0.00001 0.000001
+        for lr in 0.001 
         do
-             for momentum in 0.0 0.9
+             for momentum in 0.9
              do
-                 sbatch -p ioannidis --mem 200g  --job-name $job_name MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
+                 sbatch -p ioannidis --mem 200g  --job-name MBO2$data --time 6-00:00:00 MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
              done
         done
     done
