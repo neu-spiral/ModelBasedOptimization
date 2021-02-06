@@ -6,7 +6,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2
+from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft
 from torch.utils.data import Dataset, DataLoader
 from ADMM import LocalSolver, solveConvex, solveWoodbury, solveQuadratic, OADM, InnerADMM, ParInnerADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -14,7 +14,7 @@ from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
 import torch.optim as optim
 from datasetGenetaor import labeledDataset, unlabeledDataset
-from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers
+from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers, contrastOutliers, addWeightedOutliers
 from MTRdatasetGen import AddNoiseDataset
 
 
@@ -166,6 +166,15 @@ class ModelBasedOptimzier:
             #load batch
             try:
                 data_i = next( iterableData )
+
+                #transefr to device 
+                if torch.is_tensor( data_i ):
+                    data_i = data_i.to( self.device )
+
+                else:
+                    data_i[0] = data_i[0].to( self.device )
+                    data_i[1] = data_i[1].to( self.device )
+
             except StopIteration:
                 iterableData = iter( self.data_loader )
 
@@ -314,7 +323,10 @@ class ModelBasedOptimzier:
 
 
     @torch.no_grad()
-    def updateVariable(self, s_k, DELTA, maxiters=100, delta =0.9, gamma = 0.1, eta = 1.0):
+    def updateVariable(self, s_k, DELTA, maxiters = 250, delta =0.95, gamma = 0.1, eta = 1.0):
+
+        if DELTA <0:
+            logger.warning("Model imrpovment (delta) used for line-search Alg. is negative!")
 
         last = time.time()
 
@@ -324,6 +336,8 @@ class ModelBasedOptimzier:
         theta_k = self.model.getParameters() * 1
 
         obj_k = self.getObjective( theta_k )
+
+        logger.info("Current objective is {:.4f}.".format( obj_k ) )
 
         #initial step-size
         stp_size = eta * delta 
@@ -337,19 +351,22 @@ class ModelBasedOptimzier:
             #eval objective for new_theta
             obj_new = self.getObjective( new_theta )
 
- 
+            #log  
+            logger.info("Setting step-size: current objective and step-size are {:.4f} and {:.4f}, respectively.".format( obj_new,  stp_size ) )
+
             #check if objective for new_theta is within the desired boundaries r
-            if obj_new <= obj_k + gamma * DELTA:
+            if obj_new <= obj_k - gamma * stp_size * DELTA:
                 break 
           
             #shrink step-size
             stp_size *= delta
 
+
         now = time.time()
         logger.debug('New step-size found and parameter updated in {0:.2f}(s).'.format(now - last) )
 
         #if objective did not improve stop
-        if obj_new >=  obj_k:
+        if obj_new >  obj_k:
             obj_new = self.getObjective( theta_k )
 
             stop = True
@@ -360,7 +377,7 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self, stopping_eps = 1.e-4, iterations = 20, innerIterations = 100, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
+    def run(self,  iterations = 20, innerIterations = 100, inner_eps = 1e-4, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
         """
             Run the Line Search Baed Bregman Minmization Algorithm, where at each iteration the new desecnet direction found via calling the run method of oadm. Then step size is set via Armijo line search.
         """
@@ -385,7 +402,7 @@ class ModelBasedOptimzier:
             
             #find a dsecnt direction
             if innerSolver == 'OADM':
-                oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, world_size = world_size, logger = logger, debug = debug)             
+                oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, eps = inner_eps, world_size = world_size, logger = logger, debug = debug)             
 
             elif innerSolver == 'SGD':
                 inner_sgd_trace, model_delta = self.oadm_obj.runSGD(iterations = innerIterations,  lr = inner_lr, momentum = inner_momentum, logger = logger, debug = debug)
@@ -417,6 +434,7 @@ if __name__=="__main__":
     parser.add_argument("--local_rank", type=int)
 
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate used for running off-the-shelf solvers." )
+    parser.add_argument("--inner_eps",  type=float, default=1e-3, help="Epsilon used as threshold for stopping creiteria in ODAM.")
     parser.add_argument("--momentum", type=float, default=0.,  help="Momentum parameter for running SGD optimizer.")
     parser.add_argument("--world_size", type=int, default=1, help="Number of processes to spawn for parallel computations, defaults to 1 (no parallelism).")
     parser.add_argument("--m_dim", type=int, default=10)
@@ -435,7 +453,7 @@ if __name__=="__main__":
     parser.add_argument("--statfile", help = "File to store statistics.")
     parser.add_argument("--modelfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
-    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2'], default='ConvAEC')
+    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2', 'ConvAEC2Soft'], default='ConvAEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
     args = parser.parse_args()
 
@@ -522,7 +540,7 @@ if __name__=="__main__":
             #run the model based optimaizer
 
             if args.innerSolver == "OADM":
-                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger, debug = False) 
+                trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, inner_eps = args.inner_eps, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger, debug = False) 
 
             elif args.innerSolver == "SGD":
                 trace = MBO.run( iterations  = args.iterations, innerSolver = args.innerSolver, inner_lr = args.lr, inner_momentum = args.momentum, innerIterations  = args.inner_iterations, world_size = args.world_size, logger = logger, debug = False)

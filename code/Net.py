@@ -350,11 +350,17 @@ class Network(nn.Module):
 
     
     @torch.no_grad()
-    def loadStateDict(self, PATH):
+    def loadStateDict(self, PATH, device = None):
         """
             Load the model, where state_dict is stored in path.
         """
-        self.load_state_dict(torch.load(PATH))
+
+        if device is None:
+            loaded_path = torch.load(PATH)
+        else:
+            loaded_path = torch.load(PATH, map_location = device)
+        
+        self.load_state_dict(loaded_path )
         self.eval()
 
     def forward(self, X):
@@ -525,7 +531,65 @@ class ConvAEC2(Network):
         return torch.flatten(Y, start_dim = 1) - torch.flatten(X, start_dim = 1)
 
 
- 
+class ConvAEC2Soft(Network):
+    def __init__(self, k_in, k_h = 16, k_h2 = 4, kernel_x = 3, kernel_x2 = 3, kernel_y = 3, kernel_y2 = 3, kernel_pool = 2, device=torch.device("cpu")):
+        super(ConvAEC2Soft, self).__init__(device)
+
+        #Encoder
+        self.conv1 = nn.Conv2d(k_in, k_h, kernel_x)
+        self.conv2 = nn.Conv2d(k_h, k_h2, kernel_x2)
+       # self.pool = nn.MaxPool2d(kernel_pool, kernel_pool)
+
+        #Decoder
+        self.t_conv1 = nn.ConvTranspose2d(k_h2, k_h, kernel_y, stride=1)
+        self.t_conv2 = nn.ConvTranspose2d(k_h, k_in, kernel_y, stride=1)
+
+
+    def forward(self, X):
+        H = F.softplus(self.conv1(X))
+
+        H = F.softplus(self.conv2(H))
+
+        H = F.softplus(self.t_conv1(H))
+
+        Y = F.softplus(self.t_conv2(H))
+
+        return torch.flatten(Y, start_dim = 1) - torch.flatten(X, start_dim = 1)
+
+class ConvLin(Network):
+    def __init__(self, k_in, k_h, k_h2 = 4, kernel_x = 3, kernel_x2 = 3, h_in = 28, w_in = 28, device=torch.device("cpu")):
+
+        super(ConvLin, self).__init__(device)
+
+        #encoder
+        self.conv1 = nn.Conv2d(k_in, k_h, kernel_x)
+        self.conv2 =  nn.Conv2d(k_h, k_h2, kernel_x2)
+   
+        #dimensions first hidden layer
+        h1 = (h_in - kernel_x) + 1
+        w1 = (w_in - kernel_x) + 1
+
+        #dimensions second hidden layer
+        h2 = (h1 - kernel_x2) + 1
+        w2 = (w1 - kernel_x2) + 1
+         
+        hidden_size = k_h2 * h2 * w2
+
+        self.FC =  nn.Linear(hidden_size, h_in * w_in)
+
+    def forward(self, X):
+
+        #encoder
+        H = F.sigmoid(self.conv1(X))
+        H = F.sigmoid(self.conv2(H))
+
+        #flatten
+        H = torch.flatten(H, start_dim = 1)
+
+        #decoder
+        X_recon = self.FC(H)
+
+        return X_recon - torch.flatten(X, start_dim = 1)
         
     
 
@@ -541,25 +605,16 @@ if __name__ == "__main__":
     else:  
         dev = "cpu"  
 
-    device = torch.device(dev) 
-
-    model = AEC(m = 10, m_prime = 8, device = device)
-
-    X = torch.randn(1, 10).to( device )
-
-    model = model.to(device)
+    x = torch.randn(1, 1, 28, 28)
 
 
-    theta = model.getParameters( True )
-    
+    model = ConvLin(1, 3)
 
-    print( theta * 2)
+    out =  model(x) 
 
+    jac, sqJac = model.getJacobian( out, quadratic = True )
 
-
-
-
-
+    print(sqJac.shape)
 
     #10 rows, 6 cols, embed size 3
 #    model  = MF(100, 6, 3)

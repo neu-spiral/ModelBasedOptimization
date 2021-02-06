@@ -24,9 +24,10 @@ batch_size=$6
 p=$7
 
 rho=1.0
-rho_inner=5.0
+rho_inner=1.0
 h=1.0
 regularizerCoeff=0.001
+inner_iterations=200
 
 
 lr=$8
@@ -35,12 +36,14 @@ momentum=$9
 iters=20
 
 #running args
-run_args=$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_rho_inner"$rho_inner"_regulraization"$regularizerCoeff"_"$mode
+run_args=$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_regulraization"$regularizerCoeff"_"$mode
 
 if [[ $mode == "SGD" ]]
 then
     run_args=$run_args"_lr"$lr"_momentum"$momentum
     iters=1000
+else
+    run_args=$run_args"_rho_inner"$rho_inner
 fi
 echo $run_args
         
@@ -53,5 +56,5 @@ model_file=data/model_parm/$run_args
 
 ##model_file==data/model_parm/$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_rho_inner"$rho_inner"_MBO"
 
-python ModelBasedOptimizer.py $data_path --mode $mode --net_model $net_model --m_dim $m_dim --m_prime $m_prime --tracefile $tracefile --p $p --h $h --regularizerCoeff $regularizerCoeff --batch_size $batch_size  --logfile $logfile --iterations $iters --world_size $world_size --rho_inner $rho_inner --statfile $statfile  --modelfile $model_file  --lr $lr --momentum $momentum
+python ModelBasedOptimizer.py $data_path --mode $mode --net_model $net_model --m_dim $m_dim --m_prime $m_prime --tracefile $tracefile --p $p --h $h --regularizerCoeff $regularizerCoeff --batch_size $batch_size  --logfile $logfile --iterations $iters --world_size $world_size --rho_inner $rho_inner --statfile $statfile  --modelfile $model_file  --lr $lr --momentum $momentum --inner_iterations $inner_iterations
 

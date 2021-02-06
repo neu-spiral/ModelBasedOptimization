@@ -6,7 +6,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2
+from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2 , ConvAEC2Soft
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from helpers import clearFile, dumpFile, estimate_gFunction, loadFile, pNormProxOp
@@ -66,7 +66,7 @@ class ADAEC:
 
     """
     @torch.no_grad()
-    def __init__(self, dataset, model, batch_size = 4, lr = 1e-3, momentum = 0.9, regularizerCoeff = 1.0, p = 2, regularizer= 'ell1'):
+    def __init__(self, dataset, model, batch_size = 4, lr = 1e-3, momentum = 0.9, regularizerCoeff = 1.0, p = 2, regularizer= 'ell1', device = torch.device('cpu')):
 
         self.dataset = dataset
         self.model = model
@@ -80,6 +80,8 @@ class ADAEC:
 
         #set problem dimensions
         self.dataset_size = len( self.dataset )
+
+        self.device = device
 
         #NOTE: handle labeled data
         if torch.is_tensor( self.dataset[0] ):
@@ -145,6 +147,10 @@ class ADAEC:
             DL = DataLoader(dataset, batch_size = self.batch_size)
 
         for data_batch in DL:
+
+            #transfer to device 
+            data_batch = data_batch.to( self.device )
+
             obj += torch.sum( torch.norm( self.model(data_batch), dim = 1, p = self.p) ) / self.dataset_size
 
         return obj
@@ -179,7 +185,8 @@ class ADAEC:
             except StopIteration:
                 iterableData  = iter( DL)
 
-
+            #transfer to device 
+            data_batch = data_batch.to( self.device )
             
             #forward pass
             if self.p == -2:
@@ -248,7 +255,7 @@ class ADAEC:
 
         return deltaS, reconstructedInst
 
-    def run(self, iterations = 100, innerIterations = 500, logger = logging.getLogger('ADAEC')):
+    def run(self, iterations = 100, eps = 1e-3, innerIterations = 500, logger = logging.getLogger('ADAEC')):
         t_st = time.time()
 
         self.anomalyAddedDataset = self.dataset
@@ -294,6 +301,9 @@ class ADAEC:
             logger.info("Iteration {} done in {}(s).".format(k, time.time() - t_st) )
             logger.info("Objective and Convergence parameters, c1 and c2 are {:.4f}, {:.4f} and {:.4f}, respectively.".format(Obj, c1, c2) )
 
+            if c1 <= eps and c2 <= eps:
+                break
+
         return trace
 
 if __name__ == "__main__":
@@ -315,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--tracefile", type=str, help="File to store traces.")
     parser.add_argument("--modelfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
-    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2'], default='ConvAEC')
+    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2', 'ConvAEC2Soft'], default='ConvAEC')
     args = parser.parse_args()
 
     #Setup logger
@@ -358,7 +368,8 @@ if __name__ == "__main__":
     momentum = args.momentum, 
     regularizerCoeff = args.regularizerCoeff,
     p = args.p, 
-    regularizer = args.regularizer) 
+    regularizer = args.regularizer,
+     device = device) 
 
     #run alg. 
     trace = ADAEC_obj.run( 

@@ -7,8 +7,8 @@
 net_model=Linear
 
 #network dimensions
-m_dim=280
-m_prime=16
+m_dim=576
+m_prime=8
 
 
 
@@ -18,15 +18,15 @@ m_prime=16
 batch=8
 
 
-for data in MTR_scm1doutliers00 MTR_scm1doutliers005 MTR_scm1doutliers01
+for data in MTR_rf2_dc1.5_outliers00 #MTR_rf2_dc1.5_outliers01 MTR_rf2_dc1.5_outliers02 MTR_rf2_dc1.5_outliers03
 do
-    for p in 1 1.5  2
+    for p in  1 2 1.5
     do
-        for lr in 0.001 
+        for lr in 0.00001 
         do
              for momentum in 0.9
              do
-                 sbatch -p ioannidis --mem 200g  --job-name MBO2$data --time 6-00:00:00 MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
+                 sbatch -p short  --mem 100g  --constraint E5-2680v4@2.40GHz  --job-name MBO2$data  MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
              done
         done
     done

@@ -19,7 +19,7 @@ torch.manual_seed(1993)
 
 
 class AddNoiseDataset(Dataset):
-    def __init__(self, data, targets, outliers_idx = None, outlier_bias = 0.0, outlier_var = 1.0):
+    def __init__(self, data, targets, outliers_idx = None, outlier_bias = 0.0, outlier_var = 1.0, outlier_signal_ratio = 0.0):
         """
             Args:
                 dataset: A loaded dataset
@@ -34,19 +34,20 @@ class AddNoiseDataset(Dataset):
 
         self.outliers_idx = outliers_idx
 
+        self.outlier_signal_ratio = outlier_signal_ratio
 
         #add noise
         if outliers_idx is not None:
             for ind in range(len(self.data)):
                 if outliers_idx[ind] == 1:
-                    self.data[ind] = self.noise_fn( self.data[ind] )
-                    self.targets[ind] = self.noise_fn( self.targets[ind] )
+                    self.data[ind] = self.noise_fn( self.data[ind], outlier_bias[0], outlier_var[1] )
+                    self.targets[ind] = self.noise_fn( self.targets[ind], outlier_bias[1], outlier_var[1] )
 
                   
 
-    def noise_fn(self, data_i):
+    def noise_fn(self, data_i, bias, std):
 
-        return data_i + torch.randn(data_i.shape) * self.outlier_var + self.outlier_bias
+        return self.outlier_signal_ratio * data_i + ( torch.randn(data_i.shape) * std + bias ) * (1. - self.outlier_signal_ratio )
 
     def __len__(self):
         return len(self.data)
@@ -105,8 +106,11 @@ if __name__=="__main__":
     parser.add_argument("target_size", type = int, help = "The size of target")
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     
-    parser.add_argument("--outlier_var", type=float, default=1.0, help="Variance of outliers" )
-    parser.add_argument("--outlier_bias", type=float, default=0.0, help="Bias of outliers." )
+    parser.add_argument("--outlier_var", type=float, default=None, help="Variance of outliers" )
+    parser.add_argument("--outlier_bias", type=float, default=None, help="Bias of outliers." )
+
+    parser.add_argument("--dev_coeff", type=float, default = 1.5, help = "Deviation coefficient, i.e., the devaition of outlires mean from original data.")
+
 
     parser.add_argument("--outfile", type=str, help="Outfile")
 
@@ -138,10 +142,17 @@ if __name__=="__main__":
     outliers_idx = outliers_indices_distr.sample()
 
 
+
+    if args.outlier_bias is None:
+        outlier_bias = [torch.mean(std_Data) + torch.std( std_Data ) * args.dev_coeff, torch.mean(std_Targets) + torch.std( std_Targets ) * args.dev_coeff]
+ 
+        outlier_var = [torch.std( std_Data ),  torch.std( std_Targets )]
     
 
     #form train dataset 
-    train_datasetWithOutliers = AddNoiseDataset( std_Data_train, std_Targets_train, outliers_idx = outliers_idx, outlier_bias = args.outlier_bias, outlier_var = args.outlier_var )
+    train_datasetWithOutliers = AddNoiseDataset( std_Data_train, std_Targets_train, outliers_idx = outliers_idx, outlier_bias = outlier_bias, outlier_var = outlier_var )
+
+    print(train_datasetWithOutliers[0])
   
     #save train dataset
     dumpFile(args.outfile, train_datasetWithOutliers)

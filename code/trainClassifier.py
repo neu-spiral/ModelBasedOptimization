@@ -121,6 +121,8 @@ if __name__ == "__main__":
 
     logFile = args.logfile
 
+    logger.setLevel(logging.INFO)
+
     clearFile(logFile)
     fh = logging.FileHandler(logFile)
     fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
@@ -146,43 +148,17 @@ if __name__ == "__main__":
     
 
 
-    
-    #setting proper keys based on patterns in filenames
-    p_keywords =  {'_p1.5':1.5, '_p1':1., '_p2':2.,  '_p-2': -2.,'_p3':3.}
-    p_keys_ordered = ['_p1.5', '_p1', '_p2', '_p-2', '_p3']
-
-    alg_keywords = {'_MBO':'MBO', '_SGD_': 'SGD', '_MBOSGD': 'MBOSGD'}
-    alg_keywords_ordered = ['_MBOSGD', '_MBO', '_SGD_']
-
-    outl_keywords = {'outliers00_': 0.0, 'outliers005_': 0.05 , 'outliers01_': 0.1}
-    
-    #NOTE hard coding here!!
-    train_filenames_suffix = {0.0:  '00', 0.05: '005', 0.1: '01'}
-    
-    DICS_p = {}
-
-   #########
-
-
-
-    #find out file corresponds to which p, alg, and outliers count.
-    p  = whichKey(filename, p_keywords, p_keys_ordered) 
-
-    alg = whichKey(filename, alg_keywords, alg_keywords_ordered)
-
-    outl = whichKey(filename, outl_keywords)
-
-    #load model parameters
-    model.loadStateDict(filename) 
+    #load model 
+    model.loadStateDict(args.filename) 
 
 
     best_acc = 0.0
     
     for C in [1e-2, 1e-1, 1]:
-        logger.info("setting regularization to ", C)
+        logger.info("setting regularization to {:.2f}".format(C) )
 
         #iniizlie classifier
-        clf = sklearn.linear_model.LogisticRegression(penalty='l2', solver = 'sag', multi_class = 'auto', C = 1e-1, random_state = 0, verbose = 1)
+        clf = sklearn.linear_model.LogisticRegression(penalty='l2', solver = 'sag', multi_class = 'auto', C = C, random_state = 0, verbose = 0)
 
         #extract features and also output labels to be fed to classifer 
         X, Y = extractFeatures( model,  dataset_train)
@@ -203,7 +179,6 @@ if __name__ == "__main__":
 
         
 
-    logger.info("For p, alg, and outeliers, {}, {}, and {}respectively, the accuracy is {:.4f}".format(p, alg, outl, acc) )
 
     stats = {'train_acc': train_acc, 'test_acc': best_acc , 'C': best_C}
 

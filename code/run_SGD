@@ -4,11 +4,11 @@
 
 
 #network model
-net_model=ConvAEC2
+net_model=ConvAEC2Soft
 
 #network dimensions
 m_dim=1
-m_prime=16
+m_prime=8
 
 
 
@@ -16,16 +16,15 @@ m_prime=16
 
 batch=8
 
-for data in MNIST_CIFAR10outliers00 MNIST_CIFAR10outliers005 MNIST_CIFAR10outliers01  
+for data in MNIST_dc1.5__Fakeoutliers00 MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02 MNIST_dc1.5__Fakeoutliers03
 do
-    for p in  1 1.5 2 -2
+    for p in   1 1.5 2 -2
     do
         for lr in  0.000001
-         
         do
             for momentum in 0.9 
             do
-                sbatch  -p ioannidis --mem 200g --job-name SGD$data  --time 6-00:00:00 MBO_script $data SGD  $net_model $m_dim $m_prime $batch $p $lr $momentum
+                sbatch  -p ioannidis  --mem 100g --job-name SGD$data  --constraint E5-2680v4@2.40GHz  MBO_script $data SGD  $net_model $m_dim $m_prime $batch $p $lr $momentum
             done
         done
     done

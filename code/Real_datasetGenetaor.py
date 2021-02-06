@@ -81,7 +81,32 @@ class addOutliers(dropLabelAddNoiseDataset):
          outlier_img = torch.mean(self.outliers_dataset[outlier_data_ind][0], dim = 0, keepdim = True  )
       
          return img + outlier_img
+
+class addWeightedOutliers(dropLabelAddNoiseDataset):
+    def __init__(self, dataset, outliers_idx = None, outliers_dataset = None, signal_ratio = 0.0):
+        self.outliers_dataset = outliers_dataset
+
+        self.signal_ratio = signal_ratio
+
+        super().__init__(dataset, outliers_idx)
+
+
+    def noise_fn(self, img):
+
+         outlier_data_ind = np.random.randint( low = 0, high= len( self.outliers_dataset ) - 1  )
+
+
+         outlier_img = torch.mean(self.outliers_dataset[outlier_data_ind][0], dim = 0, keepdim = True  )
+
+         return img * self.signal_ratio + outlier_img * (1.0 - self.signal_ratio)
                 
+class contrastOutliers(dropLabelAddNoiseDataset):
+    def __init__(self, dataset, outliers_idx = None):
+        super().__init__(dataset, outliers_idx)
+
+    def noise_fn(self, img):
+
+        return torch.ones(img.shape) - img
 
 
 def binaryNoise(img, threshold = 0.5, high = 1.0, low = 0.0):
@@ -100,6 +125,8 @@ def binaryNoise(img, threshold = 0.5, high = 1.0, low = 0.0):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("dataset_name", type=str, help="The name of the dataset to download")
+    parser.add_argument("outlier_type", choices= ['OD', 'CONT'], help="Type of the outliers to be addded to the dataset. OD adds random resized samples from outlier_dataset, while CONT replaces pixel values p with 1 - p.")
+
     parser.add_argument("--outlier_dataset", default='CIFAR10', help="The name of the outlier dataset to download")
     parser.add_argument("--local_rank", type=int, default=None)
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
@@ -118,21 +145,28 @@ if __name__=="__main__":
     #create dataset
     dataset = my_dataset_class(args.data_dir, train = args.data_type == 'train', download=True, transform=my_transform)
 
-
-    #outlier dataset class
-    outlier_dataset_class = eval('datasets.' + args.outlier_dataset)
-
-    #create outliers dataset
-    outlier_dataset = outlier_dataset_class(args.data_dir,  train=True, download=True, transform = transforms.Compose([transforms.Resize(dataset[0][0].shape[-2:]), transforms.ToTensor()] ) )
-
     #outliers distribution
     outliers_indices_distr = torch.distributions.bernoulli.Bernoulli( torch.ones( len(dataset ) ) * args.outliers )
 
     #sample outliers indices
     outliers_idx = outliers_indices_distr.sample()
 
-    #create dataset where data in outlier indices are corrupted by random samples from outlier dataset
-    datasetWithOutliers = addOutliers( dataset, outliers_idx = outliers_idx, outliers_dataset = outlier_dataset )
+    if args.outlier_type  == 'OD':
+        #outlier dataset class
+        outlier_dataset_class = eval('datasets.' + args.outlier_dataset)
+
+        #create outliers dataset
+        outlier_dataset = outlier_dataset_class(args.data_dir,  train=True, download=True, transform = transforms.Compose([transforms.Resize(dataset[0][0].shape[-2:]), transforms.ToTensor()] ) )
+
+
+        #create dataset, where data in outlier indices is corrupted by random samples from outlier dataset
+        datasetWithOutliers = addOutliers( dataset, outliers_idx = outliers_idx, outliers_dataset = outlier_dataset )
+
+    elif args.outlier_type == 'CONT':
+
+        #create dataset, where data in outlier indices is corrupted by contrsatsing
+        datasetWithOutliers = contrastOutliers( dataset, outliers_idx)
+        
 
    ##NOTE: DEBUGGING###############
     outlier_ind_samp  = 0

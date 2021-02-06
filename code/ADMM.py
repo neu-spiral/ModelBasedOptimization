@@ -18,7 +18,7 @@ import math
 
 #@torch.no_grad()
 class InnerADMM():
-    def __init__(self, A, sqA, b, c, coeff, p, model, init_solution = None, rho_inner = 1.0, device = torch.device('cpu')):
+    def __init__(self, A, sqA, b, c, coeff, p, model, init_solution = None, rho_inner = 1.0, adapt_param = False, adapt_param1 = 2.0 , adapt_param2 = 10.0, device = torch.device('cpu')):
         """
             A class that implements ADMM for generic problems of the form:
 
@@ -49,6 +49,10 @@ class InnerADMM():
         self.rho_inner = rho_inner
         self.p = p
 
+        self.adapt_param1 = adapt_param1
+        self.adapt_param2 = adapt_param2
+        self.adapt_param = adapt_param
+
         #set primal and dual variables
         if init_solution is None:
             self.x = self.c * 0.0
@@ -76,6 +80,11 @@ class InnerADMM():
     
     @torch.no_grad()
     def run(self, iterations = 100, eps = 1.e-4, debug = True, logger = logging.getLogger('Inner ADMM')):
+
+        #log adaptive parameter setting
+        if self.adapt_param:
+            logger.info("Parameter, rho_inner, will be ada[ted automatically.")
+
 
         t_st = time.time()
 
@@ -151,6 +160,17 @@ class InnerADMM():
 
             if PRES <= eps and DRES <= eps:
                 break
+
+            #adapt rho 
+            if self.adapt_param:
+
+                #if PRES is much larger than DRES, decrease rho. If oppsite holds, shrink rho.
+                if PRES > self.adapt_param1 * DRES:
+                    self.rho_inner *= self.adapt_param2
+
+                elif DRES > self.adapt_param1 * PRES:
+                    self.rho_inner /= self.adapt_param2
+                
 
         return self.x 
                  
@@ -581,6 +601,10 @@ class OADM():
         #get iterable dataloader 
         iterableData = iter( self.data_loader )
 
+        #initialize avarega objective
+        avg_obj = 0.0
+
+
         for k in range(iterations):
 
             optimizer.zero_grad()
@@ -654,15 +678,23 @@ class OADM():
 
             else:
 
+                #approximate the objective
+                avg_obj += loss.item()     
+
                 if k == 0 or loss.item() < BEST_loss:
                     BEST_loss = loss.item()
                     BEST_var  = theta_VAR * 1
 
                     #evaluate an estimation of model improvement 
-                    model_improvement = self.OBJ_theta_k - BEST_loss
+                    model_improvement = self.OBJ_theta_k - avg_obj /  (k + 1)
+                
                 
 
+        if model_improvement < 0:
+            model_improvement = 0.0
+
         logger.info("Best computed objective is {:.4f}.".format( BEST_loss ) )
+        logger.info("Model improvement is {:.4f}.".format( model_improvement ) )
 
 
 
@@ -730,8 +762,8 @@ class OADM():
 
             if adapt_parameters:
                 #adapt parameters (proportional to strong convexity coefficient)
-                self.rho = self.h * (k + 1) 
-                self.gamma = self.regularizerCoeff * (k + 1)
+                self.gamma = self.h * (k + 1) 
+                self.rho = self.regularizerCoeff * (k + 1)
 
             #load a new batch 
             try:

@@ -4,11 +4,11 @@
 
 
 #network model
-net_model=Linear
+net_model=ConvAEC2Soft
 
 #network dimensions
-m_dim=280
-m_prime=16
+m_dim=1
+m_prime=8
 
 
 
@@ -21,12 +21,12 @@ momentum=0.0
 batch=8
 
 #dataset
-for data in MTR_scm1d_outliers00_b100v10 MTR_scm1d_outliers005_b100v10 MTR_scm1d_outliers01_b100v10
+for data in  MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02
 do
 
-    for p in 1 1.5 2
+    for p in  1 1.5 2
     do
-         sbatch --partition ioannidis --mem 200g  --time 6-00:00:00 --job-name MBO$data  MBO_script $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum
+         sbatch --partition ioannidis  --mem 100g --constraint E5-2680v4@2.40GHz   --job-name $data  MBO_script $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum
     done
 done
 

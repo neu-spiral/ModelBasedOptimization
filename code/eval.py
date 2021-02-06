@@ -2,11 +2,11 @@ import argparse
 import logging
 from helpers import dumpFile, loadFile
 from torch.utils.data import Dataset, DataLoader
-from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2
+from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft
 import torch
 from plotter import whichKey, barPlotter
 from datasetGenetaor import labeledDataset, unlabeledDataset
-from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers
+from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers, contrastOutliers
 from MTRdatasetGen import AddNoiseDataset
 
 @torch.no_grad()
@@ -21,8 +21,11 @@ def evalObjective(model, dataloader, outliers_ind,  p, reg_coeff):
     OBJ_tot = 0.5 * reg_coeff *  model.getParameters().frobeniusNormSq() 
     OBJ_nonOutlierstot = 0.0
    
+    OBJ_nonOutlierstot_unnorm = 0.0
 
     outliers_size = torch.sum( outliers_ind )
+
+    print("Train data has {} samples.".format( len(dataloader) ) )
 
     for ind, data in enumerate( dataloader ):
 
@@ -41,10 +44,10 @@ def evalObjective(model, dataloader, outliers_ind,  p, reg_coeff):
             continue
 
         OBJ_nonOutlierstot += OBJ_ind  / (len( dataloader ) - outliers_size )
+
   
     stats['non_outliersLoss'] = OBJ_nonOutlierstot
     stats['fullObj'] = OBJ_tot
-    
     return stats
 
 @torch.no_grad()
@@ -55,9 +58,17 @@ def evalTest(model, data_loader, p):
 
     obj = 0.0
 
+    print("Test data has {} samples.".format( len(data_loader) ) )
+
     for data in data_loader:
   
-        obj += torch.squeeze( torch.norm( model(data), p = p) ) / len(data_loader)
+       
+        if  p == -2:
+
+            obj += torch.squeeze( torch.norm( model(data), p = 2) ).item() ** 2 / len(data_loader)
+        else:
+       
+            obj += torch.squeeze( torch.norm( model(data), p = p) ).item() / len(data_loader)
 
     return obj 
 
@@ -65,7 +76,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('filenames', metavar='filename', type=str, nargs='+',
                    help='file where model parameters are stored')
-    parser.add_argument('--net_model', choices=['Linear', 'AEC', 'DAEC', 'ConvAEC2', 'ConvAEC'])
+    parser.add_argument('--net_model', choices=['Linear', 'AEC', 'DAEC', 'ConvAEC2', 'ConvAEC', 'ConvAEC2Soft'])
     parser.add_argument("--m_dim", type=int, help='dimension of eacg point.')
     parser.add_argument("--m_prime", type=int, help='dimension of the embedding.')
     parser.add_argument("--reg_coeff", type=float, default = 0.001, help = "Regularization coefficient")
@@ -97,23 +108,20 @@ if __name__ == "__main__":
 
     alg_ord = ['MBO', 'SGD', 'MBOSGD']
 
-    outl_keywords = {'outliers00_': 0.0, 'outliers005_': 0.05 , 'outliers01_': 0.1}
+    outl_keywords = {'outliers00_': 0.0, 'outliers005_': 0.05 , 'outliers01_': 0.1, 'outliers02_': 0.2, 'outliers03_': 0.3}
     
-    outl_ord = [0.0, 0.05, 0.1]
+    outl_ord = [0.0, 0.05, 0.1, 0.2, 0.3]
 
     #NOTE hard coding here!!
-    train_filenames_suffix = {0.0:  '00', 0.05: '005', 0.1: '01'}
+    train_filenames_suffix = {0.0:  '00', 0.05: '005', 0.1: '01', 0.2: '02', 0.3: '03'}
     
-    DICS_p = { }
+    DICS_nonoutliers = { }
 
-    DICS_outl = {}
-
-    DICS_alg = {}
-
+    DICS_testObj = {}
+    
  
-    outl_keys_ord = [(p, alg) for p in [1, 1.5, 2, 'ell2Sq'] for alg in ['MBO', 'SGD', 'MBOSGD']]
+    #outl_keys_ord = [(p, alg) for p in [1, 1.5, 2, 'ell2Sq'] for alg in ['MBO', 'SGD', 'MBOSGD']]
 
-    alg_keys_ord = [(p, outl) for p in [1, 1.5, 2, 'ell2Sq'] for outl in [0.0, 0.05, 0.1] ]
 
     for filename in args.filenames:
         #find out file corresponds to which p, alg, and outliers count.
@@ -123,11 +131,13 @@ if __name__ == "__main__":
 
         outl = whichKey(filename, outl_keywords)
 
+        print(filename)
+
         #load model parameters
-        model.loadStateDict(filename) 
+        model.loadStateDict(filename, device = torch.device('cpu') ) 
 
         #evaluate on test data 
-        obj = evalTest(model, data_loader, p = float(p)) 
+        obj_test = evalTest(model, data_loader, p = float(p)) 
 
 
         #get corresponding train data
@@ -140,7 +150,7 @@ if __name__ == "__main__":
 
         
         print("Alg, outliers and p are {}, {}, and {}, respectively.".format(alg, outl, p))
-        print("Non-outliers sum is {:.4f} total loss {:.4f} and test loss is {:.4f}".format(stats['non_outliersLoss'], stats['fullObj'], obj) )
+        print("Non-outliers sum is {:.2f}, total loss {:.2f} and test loss is {:.2f}".format(stats['non_outliersLoss'], stats['fullObj'], obj_test) )
 
         #change p -2 to its actual name (quadratic norm)
         if  p == -2:
@@ -148,49 +158,56 @@ if __name__ == "__main__":
 
 
         #set values in dictionaries
-        if p not in DICS_p:
-            DICS_p[p] = {}
+        if p not in DICS_nonoutliers:
+            DICS_nonoutliers[p] = {}
 
-        if alg not in DICS_p[p]:
-            DICS_p[p][alg] = {outl:  stats['non_outliersLoss']}
+        if alg not in DICS_nonoutliers[p]:
+            DICS_nonoutliers[p][alg] = {outl:  stats['non_outliersLoss']}
 
         else:
-            DICS_p[p][alg][outl] =  stats['non_outliersLoss']
+            DICS_nonoutliers[p][alg][outl] =  stats['non_outliersLoss']
 
-      #  if outl  not in DICS_outl:
-      #      DICS_outl[outl] = {(p, alg): obj}
+        
 
-      #  else:
-      #      DICS_outl[outl][(p, alg)] =  obj
+        if p not in DICS_testObj:
+            DICS_testObj[p] = {}
    
-      #  if alg not in DICS_alg:
-      #      DICS_alg[alg] = {(p, outl): stats['fullObj']}
-      #  else:
-      #      DICS_alg[alg][(p, outl)] = stats['fullObj']
+        if alg not in DICS_testObj[p]:
+
+            DICS_testObj[p][alg] = {outl: obj_test}
+
+        else:
+
+            DICS_testObj[p][alg][outl] = obj_test
+
+        
 
 
     #set missing values to zero
-    for p in DICS_p:
-       for alg in alg_keywords.values():
-           if p == 'ell2Sq' and alg != 'SGD':
-               continue 
+    for DIC in [DICS_nonoutliers, DICS_testObj]:
+        for p in DIC:
+            for alg in alg_keywords.values():
+                if p == 'ell2Sq' and alg != 'SGD':
+                    continue 
 
-           if alg not in DICS_p[p]:
-                DICS_p[p][alg] = dict([(outl, 0.0) for outl in outl_keywords.values()] )
+                if alg not in DICS_nonoutliers[p]:
+                    DICS_nonoutliers[p][alg] = dict([(outl, 0.0) for outl in outl_keywords.values()] )
 
-           for outl in outl_keywords.values():
-               if outl not in DICS_p[p][alg]:
-                   DICS_p[p][alg][outl] = 0.0
+                for outl in outl_keywords.values():
+                    if outl not in DICS_nonoutliers[p][alg]:
+                        DICS_nonoutliers[p][alg][outl] = 0.0
+
   
             
 
-    print(DICS_p)
+    print(DICS_testObj)
 
     #plot bar for each p norm
-    for p in DICS_p:
+    for p in DICS_nonoutliers:
     
-        barPlotter(DICS_p[p], args.plt_file + "_p{}".format(p) , x_axis_label  ="Outliers", y_axis_label = 'Non Outliers Loss', normalize=False, lgd=True, log_bar=False, DICS_alg_keys_ordred = outl_ord)
+        barPlotter(DICS_nonoutliers[p], args.plt_file + "_nonoutliers{}".format(p) , x_axis_label  ="Outliers", y_axis_label = 'Non Outliers Loss', normalize=False, lgd=True, log_bar=False, DICS_alg_keys_ordred = outl_ord)
 
+        barPlotter(DICS_testObj[p], args.plt_file + "_testobj{}".format(p) , x_axis_label  ="Outliers", y_axis_label = 'Test Loss', normalize=False, lgd=True, log_bar=False, DICS_alg_keys_ordred = outl_ord)
         
     #set missing values to zero
 #    for outl in DICS_outl:
