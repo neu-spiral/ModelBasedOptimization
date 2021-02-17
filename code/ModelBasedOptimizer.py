@@ -377,7 +377,7 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self,  iterations = 20, innerIterations = 100, inner_eps = 1e-4, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
+    def run(self,  iterations = 20, innerIterations = 100, adaprt_inner_eps = 95e-2, inner_eps = 1e-4, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
         """
             Run the Line Search Baed Bregman Minmization Algorithm, where at each iteration the new desecnet direction found via calling the run method of oadm. Then step size is set via Armijo line search.
         """
@@ -402,6 +402,9 @@ class ModelBasedOptimzier:
             
             #find a dsecnt direction
             if innerSolver == 'OADM':
+                #shrink inner epsilon by a factor of adaprt_inner_eps
+                inner_eps *= adaprt_inner_eps 
+
                 oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, eps = inner_eps, world_size = world_size, logger = logger, debug = debug)             
 
             elif innerSolver == 'SGD':

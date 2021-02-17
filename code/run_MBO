@@ -21,7 +21,7 @@ momentum=0.0
 batch=8
 
 #dataset
-for data in  MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02
+for data in  MNIST_dc1.5__Fakeoutliers00 MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02 MNIST_dc1.5__Fakeoutliers03
 do
 
     for p in  1 1.5 2

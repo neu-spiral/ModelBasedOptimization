@@ -2,7 +2,7 @@ import argparse
 import logging
 from helpers import dumpFile, loadFile, clearFile
 from torch.utils.data import Dataset, DataLoader
-from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2
+from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft
 import torch
 from plotter import whichKey, barPlotter
 from datasetGenetaor import labeledDataset, unlabeledDataset
@@ -79,10 +79,10 @@ def extractFeatures(model, data):
 
     for data_i in DataLoader(data, batch_size = 1):
         #hidden layer
-        H = torch.nn.functional.sigmoid( model.conv1(data_i[0]) )
+        H = torch.nn.functional.softmax( model.conv1(data_i[0]) )
 
         #second conv-layer
-        H = torch.nn.functional.sigmoid( model.conv2(H) )  
+        H = torch.nn.functional.softmax( model.conv2(H) )  
 
         #flatten
         H = torch.flatten( H, start_dim = 0)
@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     parser.add_argument("dataset_name", default='MNIST', help="Dataset to train classifier on.")
     parser.add_argument("--logfile", help="Logfile", default = 'logfiles/log')
-    parser.add_argument('--net_model', choices=['Linear', 'AEC', 'DAEC', 'ConvAEC2', 'ConvAEC'])
+    parser.add_argument('--net_model', choices=['Linear', 'AEC', 'DAEC', 'ConvAEC2', 'ConvAEC', 'ConvAEC2Soft'])
     parser.add_argument("--m_dim", type=int, help='dimension of eacg point.')
     parser.add_argument("--m_prime", type=int, help='dimension of the embedding.')
 

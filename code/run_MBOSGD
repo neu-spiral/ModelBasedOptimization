@@ -4,10 +4,10 @@
 
 
 #network model
-net_model=Linear
+net_model=ConvAEC2Soft
 
 #network dimensions
-m_dim=576
+m_dim=1
 m_prime=8
 
 
@@ -18,7 +18,7 @@ m_prime=8
 batch=8
 
 
-for data in MTR_rf2_dc1.5_outliers00 #MTR_rf2_dc1.5_outliers01 MTR_rf2_dc1.5_outliers02 MTR_rf2_dc1.5_outliers03
+for data in FashionMNIST_dc1.5__Fakeoutliers00 FashionMNIST_dc1.5__Fakeoutliers005 FashionMNIST_dc1.5__Fakeoutliers01 FashionMNIST_dc1.5__Fakeoutliers02 FashionMNIST_dc1.5__Fakeoutliers03
 do
     for p in  1 2 1.5
     do
@@ -26,7 +26,7 @@ do
         do
              for momentum in 0.9
              do
-                 sbatch -p short  --mem 100g  --constraint E5-2680v4@2.40GHz  --job-name MBO2$data  MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
+                 sbatch -p ioannidis  --mem 100g  --constraint E5-2680v4@2.40GHz  --job-name MBO2$data  MBOSGD_script $data   $net_model $m_dim $m_prime $batch $p $lr $momentum
              done
         done
     done

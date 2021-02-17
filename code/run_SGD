@@ -16,7 +16,7 @@ m_prime=8
 
 batch=8
 
-for data in MNIST_dc1.5__Fakeoutliers00 MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02 MNIST_dc1.5__Fakeoutliers03
+for data in FashionMNIST_dc1.5__Fakeoutliers00 FashionMNIST_dc1.5__Fakeoutliers005 FashionMNIST_dc1.5__Fakeoutliers01 FashionMNIST_dc1.5__Fakeoutliers02 FashionMNIST_dc1.5__Fakeoutliers03
 do
     for p in   1 1.5 2 -2
     do
