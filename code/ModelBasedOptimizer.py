@@ -6,7 +6,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft
+from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft, Linear3
 from torch.utils.data import Dataset, DataLoader
 from ADMM import LocalSolver, solveConvex, solveWoodbury, solveQuadratic, OADM, InnerADMM, ParInnerADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -377,7 +377,7 @@ class ModelBasedOptimzier:
     
         
 
-    def run(self,  iterations = 20, innerIterations = 100, adaprt_inner_eps = 95e-2, inner_eps = 1e-4, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
+    def run(self,  iterations = 20, innerIterations = 100, adapt_inner_eps = 95e-2, inner_eps = 1e-4, inner_admm_eps = 1e-2, world_size = 1, innerSolver = 'OADM', inner_momentum = 0.0, inner_lr = 1e-5,  l2SquaredSolver='MBO', logger = logging.getLogger('LSBBM'), debug = False):
         """
             Run the Line Search Baed Bregman Minmization Algorithm, where at each iteration the new desecnet direction found via calling the run method of oadm. Then step size is set via Armijo line search.
         """
@@ -402,10 +402,10 @@ class ModelBasedOptimzier:
             
             #find a dsecnt direction
             if innerSolver == 'OADM':
-                #shrink inner epsilon by a factor of adaprt_inner_eps
-                inner_eps *= adaprt_inner_eps 
+                #shrink inner epsilon by a factor of adapt_inner_eps
+                inner_eps *= adapt_inner_eps 
 
-                oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, eps = inner_eps, world_size = world_size, logger = logger, debug = debug)             
+                oadm_trace, model_delta = self.oadm_obj.run(iterations = innerIterations, eps = inner_eps, inner_eps = inner_admm_eps, world_size = world_size, logger = logger, debug = debug)             
 
             elif innerSolver == 'SGD':
                 inner_sgd_trace, model_delta = self.oadm_obj.runSGD(iterations = innerIterations,  lr = inner_lr, momentum = inner_momentum, logger = logger, debug = debug)
@@ -456,7 +456,7 @@ if __name__=="__main__":
     parser.add_argument("--statfile", help = "File to store statistics.")
     parser.add_argument("--modelfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
-    parser.add_argument("--net_model", choices=['Linear', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2', 'ConvAEC2Soft'], default='ConvAEC')
+    parser.add_argument("--net_model", choices=['Linear', 'Linear3', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2', 'ConvAEC2Soft'], default='ConvAEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
     args = parser.parse_args()
 

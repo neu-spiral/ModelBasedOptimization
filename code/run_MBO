@@ -21,12 +21,12 @@ momentum=0.0
 batch=8
 
 #dataset
-for data in  MNIST_dc1.5__Fakeoutliers00 MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02 MNIST_dc1.5__Fakeoutliers03
+for data in FashionMNIST_dc1.5__Fakeoutliers00 FashionMNIST_dc1.5__Fakeoutliers005 FashionMNIST_dc1.5__Fakeoutliers01 FashionMNIST_dc1.5__Fakeoutliers02 FashionMNIST_dc1.5__Fakeoutliers03 MNIST_dc1.5__Fakeoutliers00 MNIST_dc1.5__Fakeoutliers005 MNIST_dc1.5__Fakeoutliers01 MNIST_dc1.5__Fakeoutliers02 MNIST_dc1.5__Fakeoutliers03
 do
 
     for p in  1 1.5 2
     do
-         sbatch --partition ioannidis  --mem 100g --constraint E5-2680v4@2.40GHz   --job-name $data  MBO_script $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum
+         sbatch --time 5-00:00:00 --partition ioannidis  --mem 100g --constraint E5-2680v4@2.40GHz   --job-name $data  MBO_script $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum
     done
 done
 

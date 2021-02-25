@@ -81,6 +81,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
     if g_est is None:
         g_est = estimate_gFunction(p)
     for k in  range( math.ceil(math.log2(1./eps)) ):
+
         mid_bound = 0.5 * (upper_bound + lower_bound )
         for j in range(vec_size):
            try:
@@ -88,6 +89,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
            except ValueError:
               #if argument of g_est is above the given values (during estimating ga) the output is 1
               U_j = V_normalized[j] 
+
            U[j] = U_j
 
         #compute norm
@@ -98,6 +100,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
             upper_bound = mid_bound
         else:
             lower_bound = mid_bound
+
 
     #logging.debug('Computed the proximal operator in {0:0.2f}(s)'.format(time.time() - t_start) )
     U = U.unsqueeze(0)
@@ -185,15 +188,17 @@ if __name__=="__main__":
 #        dumpFile('interpolations/p' + str(p),  estimate_g)
 #        print('Estimation and saving done for {}'.format(p))
 
+    if args.p not in [1, 2]:
+        g_est = estimate_gFunction( args.p )
+
     t_s = time.time()
 #    logging.getLogger().setLevel(logging.INFO) 
     V = torch.randn(1, args.n)
     V =  torch.abs(V)
 
     
-    U_p = pNormProxOp(V, rho=args.rho, p=args.p)
+    U_p = pNormProxOp(V, rho=args.rho, p=args.p, g_est = g_est)
     #U = EuclidianProxOp(V, args.rho)
 #    print (U_p.size())
     t_e = time.time()
     print("Time taken is ", t_e - t_s)
-#    print ("Time {} seconds".format(t_e - t_s) )

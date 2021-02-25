@@ -384,6 +384,31 @@ class Linear(Network):
         Y_model = F.sigmoid( self.fc2(h) )
         return Y - Y_model
 
+class Linear3(Network):
+    "A class for shallow Linear models; the input size is m anbd the output size is m_prime."
+    def __init__(self, m , m_prime, hidden2 = 64, hidden1 = 32, device=torch.device("cpu")):
+        super(Linear3, self).__init__(device)
+        self.m = m
+        self.m_prime = m_prime
+        self.fc1 = nn.Linear(m, hidden2)
+        self.fc2 = nn.Linear(hidden2, hidden1)
+
+        self.fc3 = nn.Linear(hidden1, m_prime)
+
+
+    def forward(self, data):
+        "Given an input X execute a forward pass."
+        X, Y = data
+
+        h = F.softmax( self.fc1(X) )
+
+        h = F.softmax( self.fc2(h) )
+          
+
+        Y_model = F.softmax( self.fc3(h) )
+
+        return Y - Y_model
+
 class AEC(Network):
     "A class for Autoencoders; the input size is m anbd the encoded size is m_prime."
     def __init__(self, m , m_prime, device=torch.device("cpu")):
