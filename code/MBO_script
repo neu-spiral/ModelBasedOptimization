@@ -28,7 +28,7 @@ rho_inner=1.0
 h=1.0
 regularizerCoeff=0.001
 inner_iterations=200
-inner_eps=0.01
+inner_eps=0.1
 
 
 lr=$8
@@ -44,7 +44,7 @@ then
     run_args=$run_args"_lr"$lr"_momentum"$momentum
     iters=1000
 else
-    run_args=$run_args"_rho_inner"$rho_inner"_adaptEps"
+    run_args=$run_args"_rho_inner"$rho_inner"_adaptEps"$inner_eps
 fi
 echo $run_args
         
