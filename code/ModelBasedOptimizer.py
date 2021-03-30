@@ -438,6 +438,7 @@ if __name__=="__main__":
 
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate used for running off-the-shelf solvers." )
     parser.add_argument("--inner_eps",  type=float, default=1e-3, help="Epsilon used as threshold for stopping creiteria in ODAM.")
+    parser.add_argument("--gpu_id", default=None, type=int, help="GPU bus id to use, when None runs on CPU.")
     parser.add_argument("--momentum", type=float, default=0.,  help="Momentum parameter for running SGD optimizer.")
     parser.add_argument("--world_size", type=int, default=1, help="Number of processes to spawn for parallel computations, defaults to 1 (no parallelism).")
     parser.add_argument("--m_dim", type=int, default=10)
@@ -487,10 +488,19 @@ if __name__=="__main__":
      
 
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda:{}".format(0))
+    if torch.cuda.is_available() and args.gpu_id is not None:
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
+
+
+        #device = torch.device("cuda:{}". format( args.gpu_id ) ) 
+        device = torch.device("cuda:{}". format( 0 ) ) 
+
+
     else:
         device = torch.device("cpu")
+
+    logger.info("Running on {}".format( str( device ) ) )
 
     
     #initialize model

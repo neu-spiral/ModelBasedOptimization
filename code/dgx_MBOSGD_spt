@@ -1,0 +1,51 @@
+#! /bin/bash
+
+
+dataset_name=$1
+
+data_path=/mnt/WDMyBook/armin/data/real/$dataset_name
+
+mode=MBO
+
+net_model=$2
+m_dim=$3
+m_prime=$4
+
+world_size=1
+
+#parameters
+batch_size=$5
+p=$6
+
+rho=1.0
+rho_inner=5.0
+h=1.0
+regularizerCoeff=0.001
+
+
+lr=$7
+momentum=$8
+
+iters=20
+inner_iterations=500
+
+innerSolver=SGD
+
+GPU_id=2
+
+#running args
+run_args=$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_regulraization"$regularizerCoeff"_"$mode$innerSolver"_lr"$lr"_momentum"$momentum
+
+echo $run_args
+        
+
+#files
+tracefile=/mnt/WDMyBook/armin/data/traces/$run_args
+statfile=/mnt/WDMyBook/armin/data/stats/$run_args
+logfile=logfiles/$run_args
+model_file=/mnt/WDMyBook/armin/data/model_weights/$run_args
+
+##model_file==data/model_parm/$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_rho_inner"$rho_inner"_MBO"
+
+python ModelBasedOptimizer.py $data_path --mode $mode --net_model $net_model --m_dim $m_dim --m_prime $m_prime --innerSolver $innerSolver  --tracefile $tracefile --p $p --h $h --regularizerCoeff $regularizerCoeff --batch_size $batch_size  --logfile $logfile --iterations $iters --world_size $world_size --rho_inner $rho_inner --statfile $statfile  --modelfile $model_file  --lr $lr --inner_iterations $inner_iterations --momentum $momentum --gpu_id $GPU_id 
+

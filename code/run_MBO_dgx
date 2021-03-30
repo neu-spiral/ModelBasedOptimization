@@ -1,0 +1,34 @@
+#!/bin/bash
+
+
+
+
+#network model
+net_model=ConvAEC2Soft
+
+#network dimensions
+m_dim=1
+m_prime=8
+
+
+
+
+
+lr=0.001
+momentum=0.0
+
+
+batch=32
+
+#dataset
+data=MNIST_dc1.5_outliers00
+
+#p norm
+p=1.5
+
+gpu_id=1
+
+
+./dgx_MBO_spt $data MBO  $net_model $m_dim $m_prime $batch $p $lr $momentum $gpu_id
+
+

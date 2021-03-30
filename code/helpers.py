@@ -54,6 +54,7 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
     t_start = time.time()
     b_size, data_size = V.size()
 
+
     if b_size != 1:
         raise Exception('V must has a batch dimenstion of one.')
     V = V.squeeze(0)
@@ -75,22 +76,38 @@ def pNormProxOp(V, rho, p=2, eps=1.e-6, g_est=None):
         return U 
     upper_bound = torch.norm(V_normalized, p=p)
     lower_bound = 0.0
-    U =  torch.zeros(vec_size, dtype=torch.float)
+    U =  torch.zeros(vec_size, dtype=torch.float, device=V.device)
+
 
     #estimator for g function
     if g_est is None:
         g_est = estimate_gFunction(p)
+
     for k in  range( math.ceil(math.log2(1./eps)) ):
 
         mid_bound = 0.5 * (upper_bound + lower_bound )
         for j in range(vec_size):
-           try:
-              U_j = V_normalized[j] * g_est(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)) )
-           except ValueError:
-              #if argument of g_est is above the given values (during estimating ga) the output is 1
-              U_j = V_normalized[j] 
+            try:
+                if V.get_device() >= 0:
 
-           U[j] = U_j
+                    #NOTE: Tensors moved back and forth between cpu and gpu to pass through the estimated g function
+                    g_est_input_on_cpu = ( mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)) ).to( torch.device("cpu") ) 
+
+                    g_est_output_on_cpu = g_est( g_est_input_on_cpu )
+
+                    g_est_output_on_gpu = torch.tensor(g_est_output_on_cpu, dtype = torch.float32, device =  V.device)
+
+
+                    U_j =  V_normalized[j] * g_est_output_on_gpu
+
+                else:
+
+                    U_j = V_normalized[j] * g_est(mid_bound * V_normalized[j] ** ((2.0-p) / (p-1.0)) )
+
+            except ValueError:
+                #if argument of g_est is above the given values (during estimating ga) the output is 1
+                U_j = V_normalized[j] 
+            U[j] = U_j
 
         #compute norm
         U_norm = torch.norm(U, p=p)
@@ -137,9 +154,13 @@ def estimate_gFunction(p, eps=1.e-8, kind='linear'):
     """
 
     g_inv = lambda x: (1. - x ) ** (1./ (1. - p)) * x
+
     #Generate a set of x and a pairs
-    x = np.arange(0, 1, eps)
+    x = torch.arange(0, 1, eps)
+
+
     a = g_inv( x )
+
     return interp1d(a, x, kind=kind)
 
 

@@ -1,0 +1,60 @@
+#! /bin/bash
+
+dataset_name=$1
+
+data_path=/mnt/WDMyBook/armin/data/real/$dataset_name
+
+mode=$2
+
+net_model=$3
+m_dim=$4
+m_prime=$5
+
+world_size=1
+
+#parameters
+batch_size=$6
+p=$7
+
+rho=1.0
+rho_inner=1.0
+h=1.0
+regularizerCoeff=0.001
+inner_iterations=200
+inner_eps=0.01
+
+
+lr=$8
+momentum=$9
+
+iters=20
+
+#inner accuracy
+inner_eps=0.1
+
+
+GPU_id=${10}
+
+#running args
+run_args=$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_regulraization"$regularizerCoeff"_"$mode
+
+if [[ $mode == "SGD" ]]
+then
+    run_args=$run_args"_lr"$lr"_momentum"$momentum
+    iters=1000
+else
+    run_args=$run_args"_rho_inner"$rho_inner"_adaptEps"$inner_eps
+fi
+echo $run_args
+        
+
+#files
+tracefile=/mnt/WDMyBook/armin/data/traces/$run_args
+statfile=/mnt/WDMyBook/armin/data/stats/$run_args
+logfile=logfiles/$run_args
+model_file=/mnt/WDMyBook/armin/data/model_weights/$run_args
+
+##model_file==data/model_parm/$dataset_name"_"$net_model"_dims"$m_dim"_hidden"$m_prime"_p"$p"_world_size"$world_size"_BS"$batch_size"_rho_inner"$rho_inner"_MBO"
+
+python ModelBasedOptimizer.py $data_path --mode $mode --net_model $net_model --m_dim $m_dim --m_prime $m_prime --tracefile $tracefile --p $p --h $h --regularizerCoeff $regularizerCoeff --batch_size $batch_size  --logfile $logfile --iterations $iters --world_size $world_size --rho_inner $rho_inner --statfile $statfile  --modelfile $model_file  --lr $lr --momentum $momentum --inner_iterations $inner_iterations --inner_eps $inner_eps --gpu_id $GPU_id --inner_eps $inner_eps
+
