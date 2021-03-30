@@ -48,13 +48,16 @@ def whichKey( filename, keywords = {'admm':'admm'}, keys_ordered=None):
     
     
 
-def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normalize=False, lgd=True, log_bar=False, DICS_alg_keys_ordred = None):
-    def formVals(DICS_alg, DICS_alg_keys_ordred = None):
+def barPlotter(DICS, outfile, x_axis_label, bar_colors=['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-'], y_axis_label = 'Objective', normalize=False, lgd=True, log_bar=False, DICS_alg_keys_ordred = None, DICS_keys_ordred = None, x_ticks_shift = 0):
+    def formVals(DICS_alg, DICS_alg_keys_ordred = None, normalize_by = None):
 
         if DICS_alg_keys_ordred is None:
             DICS_alg_keys_ordred = sorted(DICS_alg.keys())
 
-        out = [DICS_alg[key] for key in DICS_alg_keys_ordred if key in DICS_alg]
+        if normalize_by is None:
+            normalize_by = 1.0
+
+        out = [DICS_alg[key] / normalize_by for key in DICS_alg_keys_ordred if key in DICS_alg]
 
         labels =  [str(key) for key in DICS_alg_keys_ordred]
 
@@ -72,16 +75,33 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
     i = 0
 
 
+    if DICS_keys_ordred is None:
+        DICS_keys_ordred = DICS.keys()
+
     if normalize:
         plt.ylim([0,1.1])
-        y_axis_label = "Normalized " + y_axis_label
+        #y_axis_label = "Normalized " + y_axis_label
 
-    for i, key  in enumerate(DICS):
-        values, labels = formVals(DICS[key], DICS_alg_keys_ordred)
+        for i, key  in enumerate( DICS_keys_ordred ):
+            if i ==0:
+                max_val_i = max( DICS[key].values() )
+
+            elif max( DICS[key].values() ) > max_val_i:
+                max_val_i =  max( DICS[key].values() ) 
+                
+
+
+    for i, key  in enumerate( DICS_keys_ordred ):
+        print(i, DICS_keys_ordred)
+        if key not in DICS:
+            continue 
+
+        values, labels = formVals(DICS[key], DICS_alg_keys_ordred, normalize_by = max_val_i)
         print(values, labels, key)
     #    ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=alg,log=True)
 
-        RECTS+= ax.bar(ind+i*width, values, align='center',width=width, color = colors[i], hatch = hatches[i],label=key,log=log_bar)
+        print(ind+i*width, i)
+        RECTS+= ax.bar(ind+i*width, values, align='center',width=width, color = bar_colors[i], hatch = hatches[i],label=key,log=log_bar)
 
     #legend 
     if lgd:
@@ -89,7 +109,8 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
     else:
         LGD = None
     
-    ax.set_xticks(ind ) 
+    print(ind)
+    ax.set_xticks(ind  + x_ticks_shift) 
     ax.set_xticklabels(tuple(labels),fontsize = 18)
     ax.set_xlabel( x_axis_label, fontsize = 18 )
     ax.set_ylabel(y_axis_label,fontsize=18)
@@ -106,27 +127,55 @@ def barPlotter(DICS, outfile, x_axis_label, y_axis_label = 'Objective', normaliz
         fig.savefig(outfile+".pdf",format='pdf', bbox_inches='tight' )
 
 
-def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear'):
+def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear', DICS_key_ord = None, normalize = False, line_styles=['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-'], leg_loc='lower left', leg_anchor=(0,0) ):
+
+    if DICS_key_ord is None:
+        DICS_key_ord = DICS.keys()
+
+
+    if normalize:
+        plt.ylim([0,1.1])
+        #y_axis_label = "Normalized " + y_axis_label
+
+        for i, key  in enumerate( DICS_key_ord ):
+            if i ==0:
+                max_val_i = max( DICS[key].values() )
+
+            elif max( DICS[key].values() ) > max_val_i:
+                max_val_i =  max( DICS[key].values() )
 
     #iterate over trjacetories for all leys (algorithms)
-    for i, alg in enumerate( DICS ):
+    for i, alg in enumerate( DICS_key_ord ):
 
         #load trajectory
         data_dict = DICS[alg]
 
-        vals = [float(val) for val in data_dict.values()]
+
+        if normalize:
+            vals = [float(val) / max_val_i for val in data_dict.values()]
+
+        else:
+            vals =  [float(val)  for val in data_dict.values()]
+
+      
 
         print(alg)
+        
+        if len( data_dict.values() ) > 100:
+            markevery = 100
+        else:
+            markevery = 1
+
         #plot trajectory
-        plt.plot(list( data_dict.keys() ), list( data_dict.values() ), lin_styles[i], label=alg, linewidth=3, markersize=18)
+        plt.plot(list( data_dict.keys() ), vals, line_styles[i], label=alg, linewidth=3, markersize=18, markevery = markevery)
 
     #set sizes
-    plt.xlabel(xaxis_label,fontsize = 18)
-    plt.ylabel(yaxis_label, fontsize = 18)
-    plt.xticks(fontsize = 18)
-    plt.yticks(fontsize = 16)
+    plt.xlabel(xaxis_label,fontsize = 20)
+    plt.ylabel(yaxis_label, fontsize = 20)
+    plt.xticks(fontsize = 20)
+    plt.yticks(fontsize = 18)
 
-    lgd = plt.legend( loc='upper right',bbox_to_anchor=(1,1),ncol=1,borderaxespad=0.,fontsize= 16)
+    lgd = plt.legend( loc=leg_loc, bbox_to_anchor=leg_anchor,ncol=1,borderaxespad=0.,fontsize= 14)
 
   #  plt.xlim(0.5,1.1)
     plt.xscale(x_scale)
@@ -219,27 +268,33 @@ if __name__=="__main__":
     args = parser.parse_args()
     
     
-    DICS = {}
     ##########HARD CODE#############################
    # keywords = {'_1':'p=1', '_2':'p=2',  '_-2':'ell 2 squared','_3':'p=3', 'SGD':'ell 2 squared (SGD)'}
-    keywords = {'MBO':'MBO', '_SGD':'SGD', 'MBOSGD': 'MBOSGD'}
+    keywords = {'MBO':'MBOOADM', '_SGD':'SGD', 'MBOSGD': 'MBOSGD'}
+
     kw_ord = ['MBOSGD', '_SGD', 'MBO']
 
-#    keywords = {}
-    
-  ##  for BS in ['8', '32', '128']:
-  #  for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
-  #      for momentum in ["0.0", "0.5", "0.9"]:
-  #          key = "MBOSGD_lr{}_momentum{}".format(lr, momentum)
+    DICS_key_ord  = ['MBOOADM', 'MBOSGD', 'SGD']
 
-  #          keywords[key] =  "lr {}, momentum {}".format(lr, momentum)
+    #######################
+    #keywords = {}
+    
+  #  for BS in ['8', '32', '128']:
+   # for lr in ["0.001", '0.001', '0.0001', '0.00001', "0.000001"]:
+   #     for momentum in ["0.9"]:
+   #         key = "SGD_lr{}_momentum{}".format(lr, momentum)
+
+   #         keywords[key] =  "lr {}, momentum {}".format(lr, momentum)
   ##              key = "BS{}_rho_inner5.0_SGD_lr{}_momentum{}".format(BS, lr, momentum)
 
   ##              keywords[key] = "batch-size {}, lr {}, momentum {}".format(BS, lr, momentum)
 
    # kw_ord = keywords.keys()
+
+   # DICS_key_ord = keywords.values()
 #####################################################
     
+    DICS = {}
 
     for filename in args.filenames:
 
@@ -256,8 +311,8 @@ if __name__=="__main__":
                 x_axis_label = 'iterations'
 
             elif args.xaxis ==  'time':
-                DICS[Alg] = dict( [ (trace['time'][ind], val) for ind, val in enumerate( trace[ args.yaxis ] ) ] )
-                x_axis_label = 'time(s)' 
+                DICS[Alg] = dict( [ (trace['time'][ind]/3600, val) for ind, val in enumerate( trace[ args.yaxis ] ) ] )
+                x_axis_label = 'time(h)' 
         
     #        continue
         #y-axis label
@@ -266,6 +321,6 @@ if __name__=="__main__":
         else:
             y_axis_label = 'Time(s)'
 
-    print(DICS)
+    print(DICS.keys())
     #Plot 
-    linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='linear', y_scale='linear') 
+    linePlotter(DICS, outfile=args.outfile, yaxis_label=y_axis_label, xaxis_label=x_axis_label, x_scale='log', y_scale='linear', DICS_key_ord = DICS_key_ord) 

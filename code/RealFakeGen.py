@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from numpy.linalg import matrix_rank
 import math
-from Real_datasetGenetaor import addOutliers, addWeightedOutliers
+from Real_datasetGenetaor import addOutliers, addWeightedOutliers, addWeightedOutliersWithLabels
 torch.manual_seed(1993)
 
 
@@ -30,6 +30,8 @@ if __name__=="__main__":
 
     parser.add_argument("--outlier_var", type=float, default=None, help="Variance of outliers" )
     parser.add_argument("--outlier_bias", type=float, default=None, help="Bias of outliers." )
+
+    parser.add_argument("--labled", action='store_true', dest="labeld", help="Pass to return labeled dataset.")
     args = parser.parse_args()
 
 
@@ -88,15 +90,19 @@ if __name__=="__main__":
     outliers_idx = outliers_indices_distr.sample()
 
     #create dataset where data in outlier indices are corrupted by random samples from outlier dataset
-    datasetWithOutliers = addWeightedOutliers( dataset, outliers_idx = outliers_idx, outliers_dataset = outlier_dataset )
+    if args.labeld:
+        datasetWithOutliers = addWeightedOutliersWithLabels( dataset, outliers_idx = outliers_idx, outliers_dataset = outlier_dataset )
+
+    else:
+        datasetWithOutliers = addWeightedOutliers( dataset, outliers_idx = outliers_idx, outliers_dataset = outlier_dataset )
 
    ##NOTE: DEBUGGING###############
     outlier_ind_samp  = 0
     for i in range( len(outliers_idx) ):
         if outliers_idx[i] == 1:
             outlier_ind_samp = i
-    print(dataset[outlier_ind_samp][0] )
-    print(datasetWithOutliers[outlier_ind_samp] - dataset[outlier_ind_samp][0] )
+    print(dataset[outlier_ind_samp], datasetWithOutliers[outlier_ind_samp])
+    print(datasetWithOutliers[outlier_ind_samp][0] - dataset[outlier_ind_samp][0] )
    #########################################
 
     #save dataset

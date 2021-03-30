@@ -6,7 +6,7 @@ from torch import distributed, nn
 import os
 import  torch.utils
 from torchvision import datasets, transforms
-from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft, Linear3
+from Net import AEC, DAEC, Linear, ConvAEC, ConvAEC2, ConvAEC2Soft, Linear3, ConvLinSoft, LinearSoft, Conv1dLineSoft
 from torch.utils.data import Dataset, DataLoader
 from ADMM import LocalSolver, solveConvex, solveWoodbury, solveQuadratic, OADM, InnerADMM, ParInnerADMM
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -14,7 +14,7 @@ from helpers import clearFile, dumpFile, estimate_gFunction, loadFile
 import logging
 import torch.optim as optim
 from datasetGenetaor import labeledDataset, unlabeledDataset
-from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers, contrastOutliers, addWeightedOutliers
+from Real_datasetGenetaor import dropLabelAddNoiseDataset, addOutliers, contrastOutliers, addWeightedOutliers, addWeightedOutliersWithLabels
 from MTRdatasetGen import AddNoiseDataset
 
 
@@ -456,7 +456,7 @@ if __name__=="__main__":
     parser.add_argument("--statfile", help = "File to store statistics.")
     parser.add_argument("--modelfile", type=str, help="File to store model parameters.")
     parser.add_argument("--logLevel", type=str, choices=['INFO', 'DEBUG', 'WARNING', 'ERROR'], default='INFO')
-    parser.add_argument("--net_model", choices=['Linear', 'Linear3', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2', 'ConvAEC2Soft'], default='ConvAEC')
+    parser.add_argument("--net_model", choices=['Linear', 'Linear3','LinearSoft', 'AEC', 'DAEC', 'ConvAEC', 'ConvAEC2', 'ConvAEC2Soft', 'ConvLinSoft', 'Conv1dLineSoft'], default='ConvAEC')
     parser.add_argument("--l2SquaredSolver", type=str, choices=['SGD', 'MBO'], help='Solver to use for ell 2 norm squared.')
     args = parser.parse_args()
 

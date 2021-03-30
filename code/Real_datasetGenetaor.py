@@ -99,6 +99,33 @@ class addWeightedOutliers(dropLabelAddNoiseDataset):
          outlier_img = torch.mean(self.outliers_dataset[outlier_data_ind][0], dim = 0, keepdim = True  )
 
          return img * self.signal_ratio + outlier_img * (1.0 - self.signal_ratio)
+
+class addWeightedOutliersWithLabels( addWeightedOutliers ):
+    def __init__(self, dataset, outliers_idx = None, outliers_dataset = None, signal_ratio = 0.0, num_classes = 10):
+        self.dataset = dataset
+
+        self.outliers_dataset = outliers_dataset
+
+        self.signal_ratio = signal_ratio
+
+        self.num_classes = num_classes
+
+        self.outliers_idx = outliers_idx
+
+         #dataset with outliers
+        self.datasetWithOutliers = []
+
+        #add noise
+        for ind in range(len(self.dataset)):
+            lbl = torch.nn.functional.one_hot( torch.tensor( self.dataset[ind][1], dtype=torch.long ), num_classes = num_classes ) 
+
+            if outliers_idx[ind] == 1:
+                self.datasetWithOutliers.append( ( self.noise_fn( self.dataset[ind][0] ), lbl ) )
+
+            else:
+                self.datasetWithOutliers.append(  (self.dataset[ind][0], lbl ) )
+
+
                 
 class contrastOutliers(dropLabelAddNoiseDataset):
     def __init__(self, dataset, outliers_idx = None):
@@ -173,8 +200,8 @@ if __name__=="__main__":
     for i in range( len(outliers_idx) ):
         if outliers_idx[i] == 1:
             outlier_ind_samp = i
-    print(dataset[outlier_ind_samp][0] )
-    print(datasetWithOutliers[outlier_ind_samp] - dataset[outlier_ind_samp][0] )
+    print(dataset[outlier_ind_samp][0], datasetWithOutliers[outlier_ind_samp] )
+    print(datasetWithOutliers[outlier_ind_samp][0] - dataset[outlier_ind_samp][0] )
    #########################################
 
     #save dataset

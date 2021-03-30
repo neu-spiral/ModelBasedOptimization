@@ -228,11 +228,20 @@ if __name__ == "__main__":
                         DIC[p][alg][outl] = 0.0
 
   
+
+        
             
 
     print(DICS_testObj)
 
-    #plot bar for each p norm
+
+    dumpFile(args.out_statsfile + "_NOUT", DICS_nonoutliers)
+
+    dumpFile(args.out_statsfile + "_TEST", DICS_testObj)
+
+
+
+    #plot lines for each p norm
     for p in DICS_nonoutliers:
 
         if p == 'ell2Sq':
@@ -247,10 +256,11 @@ if __name__ == "__main__":
 
             bar_colors = ['b', 'g', 'r', 'c' ,'m' ,'y' ,'k' ,'w']
     
-        barPlotter(DICS_nonoutliers[p], args.plt_file + "_nonoutliers{}".format(p) , bar_colors = bar_colors, x_axis_label  ="Outliers ($P_{out}$)", y_axis_label = '$F_{NOUT}$ (normalized)', normalize=True, lgd=False, log_bar=False, DICS_alg_keys_ordred = outl_ord, DICS_keys_ordred = DICS_keys_ordred, x_ticks_shift = x_ticks_shift)
+       
+        linePlotter(DICS_nonoutliers[p], outfile=args.outfile + "_NOUT", yaxis_label = "$F_{NOUT}$", xaxis_label =  "$P_{OUT}$", x_scale='linear', y_scale='linear', DICS_key_ord = DICS_keys_ordred, normalize = True)
 
-        barPlotter(DICS_testObj[p], args.plt_file + "_testobj{}".format(p) , bar_colors = bar_colors, x_axis_label  ="Outliers ($P_{out}}$)", y_axis_label = '$F_{TEST}$ (normalized)', normalize=True, lgd=False, log_bar=False, DICS_alg_keys_ordred = outl_ord, DICS_keys_ordred = DICS_keys_ordred, x_ticks_shift = x_ticks_shift)
-        
+        linePlotter(DICS_testobj[p], outfile=args.outfile + "_TEST", yaxis_label = "$F_{TEST}$", xaxis_label =  "$P_{OUT}$", x_scale='linear', y_scale='linear', DICS_key_ord = DICS_keys_ordred, normalize = True)
+ 
     #set missing values to zero
 #    for outl in DICS_outl:
 #        for outl_key in outl_keys_ord:

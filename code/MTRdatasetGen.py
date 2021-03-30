@@ -41,7 +41,7 @@ class AddNoiseDataset(Dataset):
             for ind in range(len(self.data)):
                 if outliers_idx[ind] == 1:
                     self.data[ind] = self.noise_fn( self.data[ind], outlier_bias[0], outlier_var[1] )
-                    self.targets[ind] = self.noise_fn( self.targets[ind], outlier_bias[1], outlier_var[1] )
+                   # self.targets[ind] = self.noise_fn( self.targets[ind], outlier_bias[1], outlier_var[1] )
 
                   
 
@@ -102,7 +102,7 @@ def readFile(file_name, target_size):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("datafile", type=str, help="The name of the dataset to download")
+    parser.add_argument("datafile", type=str, help="The file address for the dataset to download")
     parser.add_argument("target_size", type = int, help = "The size of target")
     parser.add_argument("--outliers", type=float, help='A real nuber between 0 and 1, the portion of data points that are outliers.', default=0.0)
     
@@ -152,7 +152,12 @@ if __name__=="__main__":
     #form train dataset 
     train_datasetWithOutliers = AddNoiseDataset( std_Data_train, std_Targets_train, outliers_idx = outliers_idx, outlier_bias = outlier_bias, outlier_var = outlier_var )
 
-    print(train_datasetWithOutliers[0])
+
+    for i  in range( len( outliers_idx) ):
+        if outliers_idx[i] == 1.:
+        
+            print(train_datasetWithOutliers[i])
+            break
   
     #save train dataset
     dumpFile(args.outfile, train_datasetWithOutliers)

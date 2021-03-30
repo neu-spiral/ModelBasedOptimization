@@ -369,10 +369,12 @@ class Network(nn.Module):
 
 class Linear(Network):
     "A class for shallow Linear models; the input size is m anbd the output size is m_prime."
-    def __init__(self, m , m_prime, hidden = 32, device=torch.device("cpu")):
+    def __init__(self, m , m_prime, hidden = 16, device=torch.device("cpu")):
         super(Linear, self).__init__(device)
         self.m = m
         self.m_prime = m_prime
+
+        #fully connected layers 
         self.fc1 = nn.Linear(m, hidden)
         self.fc2 = nn.Linear(hidden, m_prime)
 
@@ -380,9 +382,49 @@ class Linear(Network):
         "Given an input X execute a forward pass."
         X, Y = data
 
-        h = F.sigmoid( self.fc1(X) )
-        Y_model = F.sigmoid( self.fc2(h) )
+        #flatten input batch 
+        X = torch.flatten(X, start_dim = 1)
+
+        #first fully-connected layer
+        h = F.softplus( self.fc1(X) )
+
+        #second fully connected layer
+        Y_model = F.softmax( self.fc2(h), dim = 1 )
+
         return Y - Y_model
+
+    def eval_acc(self, data):
+
+        X, Y = data
+
+        pred_soft_lbl = Y - self.forward(data)
+
+
+        pred_lbl = torch.argmax(pred_soft_lbl, 1)
+
+        correct_pred = torch.sum(pred_lbl == Y)
+
+        acc = correct_pred / Y.shape[0]
+
+        return acc
+
+class LinearSoft( Linear ):
+    def forward(self, data):
+        "Given an input X execute a forward pass."
+        X, Y = data
+
+        #flatten input batch 
+        X = torch.flatten(X, start_dim = 1)
+
+        #first fully-connected layer
+        h = F.softplus( self.fc1(X) )
+
+        #second fully connected layer
+        Y_model = F.softplus( self.fc2(h) )
+
+        return Y - Y_model
+
+        
 
 class Linear3(Network):
     "A class for shallow Linear models; the input size is m anbd the output size is m_prime."
@@ -615,6 +657,107 @@ class ConvLin(Network):
         X_recon = self.FC(H)
 
         return X_recon - torch.flatten(X, start_dim = 1)
+
+class ConvLinSoft(Network):
+    def __init__(self, k_in, k_h, k_h2 = 4, k_h3 = 1,  kernel_x = 3, kernel_x2 = 3, kernel_x3 = 8,  h_in = 28, w_in = 28, dim_out = 10, device=torch.device("cpu")):
+
+        super(ConvLinSoft, self).__init__(device)
+
+        #conv layers
+        self.conv1 = nn.Conv2d(k_in, k_h, kernel_x)
+        self.conv2 =  nn.Conv2d(k_h, k_h2, kernel_x2)
+        self.conv3 = nn.Conv2d(k_h2, k_h3, kernel_x3)
+
+        #dimensions first hidden layer
+        h1 = (h_in - kernel_x) + 1
+        w1 = (w_in - kernel_x) + 1
+
+        #dimensions second hidden layer
+        h2 = (h1 - kernel_x2) + 1
+        w2 = (w1 - kernel_x2) + 1
+
+        #dimensions third hidden layer
+        h3 = (h2 - kernel_x3) + 1
+        w3 = (w2 - kernel_x3) + 1
+    
+
+        hidden_size = k_h3 * h3 * w3
+
+        self.FC =  nn.Linear(hidden_size, dim_out)
+
+    def forward(self, X):
+        X_data, X_lbl = X
+
+
+        #conv layers
+        H = F.softplus(self.conv1(X_data))
+
+        H = F.softplus( self.conv2(H) )
+
+        H = F.softplus( self.conv3(H) )
+
+        #flatten
+        H = torch.flatten(H, start_dim = 1)
+       
+        #prediction
+        pred_lbl = F.softmax( self.FC( H ) )
+
+        
+
+        return X_lbl - pred_lbl
+
+    def eval_acc(self, X):
+        X_data, X_lbl = X
+
+        pred_soft_lbl = X_lbl - self.forward(X) 
+
+
+        print(pred_soft_lbl.shape, pred_soft_lbl, X_lbl)
+        pred_lbl = torch.argmax(pred_soft_lbl, 1)
+
+        print(pred_lbl)
+        correct_pred = torch.sum(pred_lbl == X_lbl)
+
+        acc = correct_pred / X_lbl.shape[0]
+
+        return acc 
+
+class Conv1dLineSoft(Network):
+    def __init__(self, dim_in, dim_out, c_numb = 1, kernel_x = 3, device=torch.device("cpu")):
+
+        super(Conv1dLineSoft, self).__init__(device)
+
+        self.conv1d = nn.Conv1d(1, c_numb, kernel_x)
+
+        dim_h = ( (dim_in - kernel_x) + 1 ) * c_numb
+
+        self.FC = nn.Linear(dim_h, dim_out)
+
+    def forward(self, X):
+
+        X_data, X_lbl = X
+
+
+        if len(X_data.shape) == 2:
+            X_data = torch.unsqueeze(X_data, 1)
+
+        elif len(X_data.shape == 3) and X_data.shape[1] == 1:
+            X_data = X_data
+  
+        else:
+            print("Input must be either 2-d or 3-d with the channel dimension of 1 (the first dimension is batch)")
+            raise ValueError 
+        
+        H = F.softplus( self.conv1d(X_data) )
+
+        H = torch.flatten(H, start_dim = 1)
+
+        H = self.FC( H )
+
+        X_lbl_pred = F.softplus( H )
+
+        return X_lbl - X_lbl_pred
+        
         
     
 
@@ -630,12 +773,14 @@ if __name__ == "__main__":
     else:  
         dev = "cpu"  
 
-    x = torch.randn(1, 1, 28, 28)
+    x = torch.randn(1, 280)
+
+    y = torch.randn(1, 16)
 
 
-    model = ConvLin(1, 3)
+    model = Conv1dLineSoft( 280, 16 )
 
-    out =  model(x) 
+    out =  model( (x, y) ) 
 
     jac, sqJac = model.getJacobian( out, quadratic = True )
 
