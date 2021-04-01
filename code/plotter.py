@@ -127,14 +127,17 @@ def barPlotter(DICS, outfile, x_axis_label, bar_colors=['b^-','g*-','rD-','cX-',
         fig.savefig(outfile+".pdf",format='pdf', bbox_inches='tight' )
 
 
-def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear', DICS_key_ord = None, normalize = False, line_styles=['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-'], leg_loc='lower left', leg_anchor=(0,0) ):
+def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness coefficient $\kappa$', x_scale='linear', y_scale='linear', DICS_key_ord = None, normalize = False, line_styles=['b^-','g*-','rD-','cX-','m*--','yH-', 'mv-'], leg_loc='lower left', leg_anchor=(0,0) , ylim=None):
 
     if DICS_key_ord is None:
         DICS_key_ord = DICS.keys()
 
 
+
+
     if normalize:
-        plt.ylim([0,1.1])
+        if y_scale != 'log':
+            plt.ylim([0,1.1])
         #y_axis_label = "Normalized " + y_axis_label
 
         for i, key  in enumerate( DICS_key_ord ):
@@ -144,22 +147,24 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
             elif max( DICS[key].values() ) > max_val_i:
                 max_val_i =  max( DICS[key].values() )
 
+    plt.figure()
+
     #iterate over trjacetories for all leys (algorithms)
     for i, alg in enumerate( DICS_key_ord ):
 
         #load trajectory
         data_dict = DICS[alg]
 
+        x_vals = sorted( data_dict.keys() )
+        
+
+        y_vals = [data_dict[x_val] for x_val  in x_vals]
 
         if normalize:
-            vals = [float(val) / max_val_i for val in data_dict.values()]
+            y_vals = [float(val) / max_val_i for val in y_vals]
 
-        else:
-            vals =  [float(val)  for val in data_dict.values()]
 
-      
 
-        print(alg)
         
         if len( data_dict.values() ) > 100:
             markevery = 100
@@ -167,15 +172,26 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
             markevery = 1
 
         #plot trajectory
-        plt.plot(list( data_dict.keys() ), vals, line_styles[i], label=alg, linewidth=3, markersize=18, markevery = markevery)
+        plt.plot(x_vals, y_vals, line_styles[i], label=alg, linewidth=3, markersize=18, markevery = markevery)
 
     #set sizes
     plt.xlabel(xaxis_label,fontsize = 20)
     plt.ylabel(yaxis_label, fontsize = 20)
     plt.xticks(fontsize = 20)
-    plt.yticks(fontsize = 18)
+    plt.yticks(fontsize = 20)
 
-    lgd = plt.legend( loc=leg_loc, bbox_to_anchor=leg_anchor,ncol=1,borderaxespad=0.,fontsize= 14)
+    #set ylim
+    if ylim is not None:
+        plt.ylim( ylim )
+
+    if leg_loc is None:
+        lgd = None
+
+    elif leg_loc == 'top':
+        lgd = plt.legend(ncol = len(DICS_key_ord), borderaxespad=0.,loc=3, bbox_to_anchor=(0., 1.02, 1., .102), fontsize=16, mode='expand')
+
+    else:
+        lgd = plt.legend( loc=leg_loc, bbox_to_anchor=leg_anchor,ncol=1,borderaxespad=0.,fontsize= 16)
 
   #  plt.xlim(0.5,1.1)
     plt.xscale(x_scale)
@@ -183,7 +199,11 @@ def linePlotter(DICS, outfile, yaxis_label='Objective', xaxis_label='Looseness c
 
 
     #save figure
-    plt.savefig(outfile+'.pdf',  bbox_extra_artists=(lgd,), format='pdf', bbox_inches='tight' )
+    if leg_loc is not None:
+        plt.savefig(outfile+'.pdf',  bbox_extra_artists=(lgd,), format='pdf', bbox_inches='tight' )
+
+    else:
+        plt.savefig(outfile+'.pdf', format='pdf', bbox_inches='tight' )
 
 def doubleAxeslinePlotter(DIC, outfile, yaxis_label='Objective', y2axis_label='Satisfied Constraints Ratio', xaxis_label='Time (s)', x_scale='linear', y_scale='linear'):
     def formVals(DIC_alg):
